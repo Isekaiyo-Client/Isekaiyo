@@ -17,8 +17,22 @@ use std::fs;
 use std::path::PathBuf;
 
 /// Current configuration schema version. Bump when the shape changes and add
-/// a migration branch in `load`.
-pub const CONFIG_SCHEMA_VERSION: u32 = 1;
+/// a migration branch in [`migrate`].
+pub const CONFIG_SCHEMA_VERSION: u32 = 2;
+
+/// Bring a parsed configuration of any older schema up to date. Runs before
+/// the current version constant is stamped on, so a v1 file written by an old
+/// build loads cleanly into a v2 app and is re-persisted as v2.
+fn migrate(config: &mut AppConfig) {
+    // v1 -> v2 added `confirm_before_delete` / `animations_enabled`. Serde's
+    // `#[serde(default)]` has already supplied their values for older files;
+    // pin them explicitly so this migration is real code with observable
+    // behavior, ready to grow as future schema steps arrive.
+    if config.schema_version < 2 {
+        config.confirm_before_delete = true;
+        config.animations_enabled = true;
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -44,6 +58,10 @@ pub struct AppConfig {
     pub theme: Theme,
     pub start_page: StartPage,
     pub selected_instance: Option<InstanceId>,
+    /// Ask for confirmation before deleting an instance (schema v2).
+    pub confirm_before_delete: bool,
+    /// UI motion; disabling also honors reduced-motion system preferences (v2).
+    pub animations_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -53,6 +71,8 @@ impl Default for AppConfig {
             theme: Theme::Amoled,
             start_page: StartPage::Home,
             selected_instance: None,
+            confirm_before_delete: true,
+            animations_enabled: true,
         }
     }
 }
@@ -101,8 +121,7 @@ impl ConfigStore {
 
         match serde_json::from_str::<AppConfig>(&raw) {
             Ok(mut config) => {
-                // Migration point: future versions branch on config.schema_version
-                // here, transform the value, and only then adopt the new constant.
+                migrate(&mut config);
                 config.schema_version = CONFIG_SCHEMA_VERSION;
                 LoadedConfig {
                     config,
@@ -211,6 +230,46 @@ mod tests {
             backup.exists(),
             "corrupt file must be preserved for diagnosis"
         );
+    }
+
+    #[test]
+    fn v1_file_migrates_to_current_schema() {
+        let dir = unique_temp_dir("cfg-v1-migration");
+        fs::create_dir_all(&dir).unwrap();
+        // A real v1 file: no v2 fields, old schema_version.
+        fs::write(
+            dir.join("config.json"),
+            r#"{ "schema_version": 1, "theme": "sakura", "start_page": "home", "selected_instance": null }"#,
+        )
+        .unwrap();
+
+        let store = ConfigStore::new(&dir);
+        let loaded = store.load();
+        assert_eq!(loaded.source, LoadSource::File);
+        assert_eq!(loaded.config.theme, Theme::Sakura);
+        assert!(loaded.config.confirm_before_delete, "v2 default");
+        assert!(loaded.config.animations_enabled, "v2 default");
+        assert_eq!(loaded.config.schema_version, CONFIG_SCHEMA_VERSION);
+
+        // Re-saving persists it in the current shape.
+        store.save(&loaded.config).unwrap();
+        let reloaded = store.load();
+        assert_eq!(reloaded.config, loaded.config);
+    }
+
+    #[test]
+    fn settings_roundtrip_preserves_v2_fields() {
+        let dir = unique_temp_dir("cfg-v2-roundtrip");
+        let store = ConfigStore::new(&dir);
+        let config = AppConfig {
+            confirm_before_delete: false,
+            animations_enabled: false,
+            ..AppConfig::default()
+        };
+        store.save(&config).unwrap();
+        let loaded = store.load();
+        assert!(!loaded.config.confirm_before_delete);
+        assert!(!loaded.config.animations_enabled);
     }
 
     #[test]

@@ -14,6 +14,7 @@ import {
 import {
   Banner,
   Button,
+  ConfirmDialog,
   Dialog,
   EmptyState,
   Field,
@@ -111,13 +112,12 @@ export function Instances({
     }
   }
 
-  async function confirmDelete() {
-    if (dialog.kind !== "delete") return;
+  async function removeInstance(target: Instance) {
     setBusy(true);
     setActionError(null);
     try {
-      await deleteInstance(dialog.target.id);
-      if (config.selected_instance === dialog.target.id) {
+      await deleteInstance(target.id);
+      if (config.selected_instance === target.id) {
         onSelectedChange(null);
       }
       setDialog({ kind: "none" });
@@ -126,6 +126,15 @@ export function Instances({
       setActionError(toErrorMessage(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  /** Honors Settings → General → “Confirm before deleting”. */
+  function requestDelete(target: Instance) {
+    if (config.confirm_before_delete) {
+      setDialog({ kind: "delete", target });
+    } else {
+      void removeInstance(target);
     }
   }
 
@@ -204,7 +213,7 @@ export function Instances({
                   <Button variant="ghost" onClick={() => openEdit(inst)}>
                     Edit
                   </Button>
-                  <Button variant="danger" onClick={() => setDialog({ kind: "delete", target: inst })}>
+                  <Button variant="danger" onClick={() => requestDelete(inst)}>
                     Delete
                   </Button>
                 </span>
@@ -273,19 +282,14 @@ export function Instances({
       )}
 
       {dialog.kind === "delete" && (
-        <Dialog title={`Delete ${dialog.target.name}?`} onClose={() => setDialog({ kind: "none" })}>
-          <div className="dialog-body">
-            <p>This permanently removes the instance entry. The game directory is untouched.</p>
-            <div className="dialog-actions">
-              <Button variant="ghost" onClick={() => setDialog({ kind: "none" })}>
-                Cancel
-              </Button>
-              <Button variant="danger" onClick={() => void confirmDelete()} disabled={busy}>
-                {busy ? "Deleting…" : "Delete"}
-              </Button>
-            </div>
-          </div>
-        </Dialog>
+        <ConfirmDialog
+          title={`Delete ${dialog.target.name}?`}
+          body="This permanently removes the instance entry. The game directory is untouched."
+          confirmLabel="Delete"
+          busy={busy}
+          onConfirm={() => void removeInstance(dialog.target)}
+          onCancel={() => setDialog({ kind: "none" })}
+        />
       )}
     </section>
   );

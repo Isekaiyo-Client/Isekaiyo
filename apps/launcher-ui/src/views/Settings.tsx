@@ -1,23 +1,22 @@
-// Settings — persists through setConfig; a change here survives restart (the
-// persistence proof is part of Milestone 001 acceptance).
-import type { AppConfig, StartPage, SystemInfo, Theme } from "../api";
-import { Banner } from "../components/ui";
+// Settings — persisted user preferences (schema v2). Every change goes
+// through patchConfig in App (optimistic; core is the source of truth on
+// failure) and survives restart. Build/version info lives on the About page.
+import type { AppConfig, StartPage, Theme } from "../api";
+import { Banner, SettingRow, Switch } from "../components/ui";
 
 const THEMES: readonly { value: Theme; label: string; hint: string }[] = [
-  { value: "amoled", label: "AMOLED", hint: "True black, minimal noise" },
-  { value: "modern", label: "Modern", hint: "Neutral dark surfaces" },
-  { value: "sakura", label: "Sakura", hint: "Black with pink accents" },
+  { value: "amoled", label: "AMOLED", hint: "True black, sakura accent — the Isekaiyo identity" },
+  { value: "modern", label: "Modern", hint: "Neutral dark surfaces, calm accent" },
+  { value: "sakura", label: "Sakura", hint: "Deep plum-black, stronger sakura" },
 ];
 
 export function Settings({
   config,
   onChange,
-  info,
   startupWarning,
 }: {
   config: AppConfig;
   onChange: (patch: Partial<AppConfig>) => void;
-  info: SystemInfo | null;
   startupWarning: string | null;
 }) {
   return (
@@ -30,7 +29,21 @@ export function Settings({
       {startupWarning && <Banner kind="warn">{startupWarning}</Banner>}
 
       <div className="panel">
-        <h2>Theme</h2>
+        <h2>General</h2>
+        <SettingRow
+          name="Confirm before deleting"
+          hint="Ask for confirmation when deleting an instance."
+        >
+          <Switch
+            checked={config.confirm_before_delete}
+            onChange={(next) => onChange({ confirm_before_delete: next })}
+            label="Confirm before deleting an instance"
+          />
+        </SettingRow>
+      </div>
+
+      <div className="panel">
+        <h2>Appearance</h2>
         <div className="theme-grid" role="radiogroup" aria-label="Theme">
           {THEMES.map((t) => (
             <button
@@ -47,6 +60,13 @@ export function Settings({
             </button>
           ))}
         </div>
+        <SettingRow name="Animations" hint="Disable to remove all motion from the interface.">
+          <Switch
+            checked={config.animations_enabled}
+            onChange={(next) => onChange({ animations_enabled: next })}
+            label="Interface animations"
+          />
+        </SettingRow>
       </div>
 
       <div className="panel">
@@ -61,25 +81,6 @@ export function Settings({
             <option value="instances">Instances</option>
           </select>
         </label>
-      </div>
-
-      <div className="panel">
-        <h2>About this build</h2>
-        {info ? (
-          <dl className="about-list">
-            <dt>Core version</dt>
-            <dd>{info.app_version}</dd>
-            <dt>Platform</dt>
-            <dd>{info.target}</dd>
-            <dt>Profile</dt>
-            <dd>{info.profile}</dd>
-          </dl>
-        ) : (
-          <p className="muted">Connecting to core…</p>
-        )}
-        <p className="muted about-note">
-          Isekaiyo is an independent open-source project, not affiliated with Mojang Studios or Microsoft.
-        </p>
       </div>
     </section>
   );

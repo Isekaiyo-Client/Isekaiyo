@@ -1,8 +1,10 @@
-// Home — the first screen (spec §5). Honest by design: the Play control is
-// real UI but disabled until launching exists in a later milestone, and it
-// says so instead of pretending.
-import type { Instance } from "../api";
-import { Button, EmptyState } from "../components/ui";
+// Home — the launcher dashboard. The Play control is wired to the real
+// `launch_instance` command; until the Minecraft runtime milestone lands the
+// core answers with `runtime.unavailable`, which we surface honestly instead
+// of faking progress.
+import { useState } from "react";
+import { launchInstance, toErrorMessage, type CommandError, type Instance } from "../api";
+import { Banner, Button, EmptyState } from "../components/ui";
 
 export function Home({
   instances,
@@ -15,7 +17,24 @@ export function Home({
   onNavigate: (section: "instances" | "settings") => void;
   onSelect: (id: string | null) => void;
 }) {
+  const [launching, setLaunching] = useState(false);
+  const [notice, setNotice] = useState<{ kind: "warn" | "error"; text: string } | null>(null);
   const active = instances.find((i) => i.id === selected) ?? null;
+
+  async function play() {
+    if (!active) return;
+    setLaunching(true);
+    setNotice(null);
+    try {
+      await launchInstance(active.id);
+      // Unreachable today; when the runtime exists this is where session UI goes.
+    } catch (e) {
+      const code = (e as Partial<CommandError>)?.code;
+      setNotice({ kind: code === "runtime.unavailable" ? "warn" : "error", text: toErrorMessage(e) });
+    } finally {
+      setLaunching(false);
+    }
+  }
 
   return (
     <section className="view" aria-label="Home">
@@ -33,17 +52,17 @@ export function Home({
                 {active.minecraft_version} · {active.loader.kind}
               </span>
             </div>
+            {notice && <Banner kind={notice.kind}>{notice.text}</Banner>}
             <div className="play-actions">
               <Button variant="ghost" onClick={() => onSelect(null)} ariaLabel="Clear selected instance">
                 Clear selection
               </Button>
-              <Button variant="primary" disabled ariaLabel="Play is not available yet">
-                ▶ Play
+              <Button variant="primary" disabled={launching} onClick={() => void play()} ariaLabel={`Play ${active.name}`}>
+                {launching ? "Preparing…" : "▶ Play"}
               </Button>
             </div>
             <p className="muted play-note">
-              Launching arrives with the version-metadata milestone — the button stays disabled until it can do
-              something real.
+              The Minecraft runtime is not implemented yet — pressing Play reports that instead of pretending.
             </p>
           </>
         ) : (

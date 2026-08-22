@@ -131,6 +131,82 @@ export function LoaderBadge({ kind, version }: { kind: string; version: string |
   );
 }
 
+/** Accessible toggle switch (role="switch"); label + hint live beside it. */
+export function Switch({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      className="switch"
+      onClick={() => onChange(!checked)}
+    />
+  );
+}
+
+/** A settings row: name + hint on the left, control on the right. */
+export function SettingRow({
+  name,
+  hint,
+  children,
+}: {
+  name: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="setting-row">
+      <div className="setting-copy">
+        <span className="setting-name">{name}</span>
+        {hint && <span className="setting-hint">{hint}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** Confirmation dialog for destructive actions. */
+export function ConfirmDialog({
+  title,
+  body,
+  confirmLabel,
+  busy = false,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  busy?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Dialog title={title} onClose={onCancel}>
+      <div className="dialog-body">
+        <p>{body}</p>
+        <div className="dialog-actions">
+          <Button variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={onConfirm} disabled={busy}>
+            {busy ? "Working…" : confirmLabel}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
 export function Spinner({ label }: { label: string }) {
   return (
     <div className="spinner-row" role="status">

@@ -46,6 +46,17 @@ impl CommandError {
             message: message.into(),
         }
     }
+
+    /// Stable category for capabilities whose domain layer exists but whose
+    /// runtime implementation does not yet (launch, downloads, auth). The UI
+    /// matches on `runtime.unavailable` to render honest "not built yet"
+    /// states instead of generic failures.
+    pub fn runtime_unavailable(message: impl Into<String>) -> Self {
+        Self {
+            code: "runtime.unavailable".to_owned(),
+            message: message.into(),
+        }
+    }
 }
 
 /// Response of the `get_system_info` shell command.
@@ -110,6 +121,12 @@ mod tests {
         let err: CommandError =
             ikk_core::Error::new(ikk_core::ErrorCode::InstanceInvalid, "bad name").into();
         assert_eq!(err.code, "instance.invalid");
+    }
+
+    #[test]
+    fn runtime_unavailable_has_stable_code() {
+        let err = CommandError::runtime_unavailable("not implemented yet");
+        assert_eq!(err.code, "runtime.unavailable");
     }
 
     #[test]

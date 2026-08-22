@@ -14,6 +14,8 @@ The launcher is fully useful **without** the Isekaiyo client. The client is an o
 
 **Milestone 001 — Foundation vertical slice.** The application shell is real: it starts through an explicit initialization sequence (logging → platform paths → configuration → instance store → UI), persists configuration and instances as versioned JSON with safe recovery from corrupt files, and provides working Instances management (create / edit / delete / select) behind a typed IPC boundary. Launching Minecraft itself does **not** exist yet; unimplemented sections are marked honestly in the UI. Scope and acceptance: [Milestone 1](docs/roadmap/milestone-001-foundation.md).
 
+**Milestone 002 — Shell hardening & launch boundary (in progress).** Semantic design-token theming (AMOLED black + sakura pink), settings schema v2 with migration, a real `launch_instance` command that refuses honestly with `runtime.unavailable`, a typed Minecraft version model, and an About page. Scope and acceptance: [Milestone 2](docs/roadmap/milestone-002-shell-hardening.md).
+
 Verified locally: `cargo test --workspace` (26 tests) · `cargo clippy -D warnings` · `pnpm typecheck/lint/test/build`. See the [foundation audit](docs/development/foundation-audit.md) for exactly what was executed vs. reviewed-only.
 
 Start reading here:

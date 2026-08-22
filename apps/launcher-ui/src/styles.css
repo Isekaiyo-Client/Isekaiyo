@@ -1,32 +1,69 @@
-/* Isekaiyo design system — Milestone 001.
-   Tokens are custom properties so the theme engine (docs/vision.md §Theming)
-   can later replace values without touching components. Three themes ship via
-   [data-like class on .shell]: amoled (default), modern, sakura. */
+/* Isekaiyo design system — Phase 2.
+   Semantic custom properties only: components never hard-code colors
+   (spec §9). Three themes ship by toggling a class on .shell:
+   amoled (default), modern, sakura. The brand identity is AMOLED black +
+   sakura pink; "modern" exists as a calmer alternative, not the default. */
 
 :root {
+  /* backgrounds & surfaces */
   --ikk-bg: #000000;
   --ikk-surface: #0a0a0c;
-  --ikk-surface-2: #101014;
+  --ikk-surface-elevated: #101014;
+  --ikk-surface-hover: rgba(255, 255, 255, 0.04);
+
+  /* strokes */
   --ikk-border: #1d1d22;
+
+  /* text */
   --ikk-text: #e8e8ec;
   --ikk-muted: #8b8b95;
-  --ikk-accent: #7f5cff;
-  --ikk-accent-soft: rgba(127, 92, 255, 0.12);
+
+  /* accent — the Isekaiyo sakura identity */
+  --ikk-accent: #ff5c8a;
+  --ikk-accent-soft: rgba(255, 92, 138, 0.12);
+  --ikk-accent-hover: rgba(255, 92, 138, 0.22);
+
+  /* status */
   --ikk-danger: #ff6b6b;
   --ikk-warn: #ffb454;
+  --ikk-success: #6ee7a0;
+  --ikk-info: #7fb4ff;
+
+  /* geometry & motion */
   --ikk-radius: 8px;
   --ikk-radius-sm: 5px;
+  --ikk-speed: 120ms;
+
+  --ikk-shadow-dialog: 0 18px 50px rgba(0, 0, 0, 0.55);
 }
 
+/* Calm neutral variant: same structure, desaturated cool accent. */
 .theme-modern {
   --ikk-bg: #0d0d10;
   --ikk-surface: #15151a;
-  --ikk-surface-2: #1b1b21;
+  --ikk-surface-elevated: #1b1b21;
+  --ikk-accent: #9a8cff;
+  --ikk-accent-soft: rgba(154, 140, 255, 0.12);
+  --ikk-accent-hover: rgba(154, 140, 255, 0.22);
 }
 
+/* Stronger sakura expression: warmer accent + restrained bloom. */
 .theme-sakura {
-  --ikk-accent: #ff5c8a;
-  --ikk-accent-soft: rgba(255, 92, 138, 0.12);
+  --ikk-bg: #050204;
+  --ikk-surface: #100a0e;
+  --ikk-surface-elevated: #171016;
+  --ikk-border: #2a1d24;
+  --ikk-accent: #ff85b0;
+  --ikk-accent-soft: rgba(255, 133, 176, 0.14);
+  --ikk-accent-hover: rgba(255, 133, 176, 0.26);
+}
+
+/* User preference (Settings → Appearance): kill all motion app-wide. */
+.no-anim *,
+.no-anim *::before,
+.no-anim *::after {
+  transition: none !important;
+  animation: none !important;
 }
 
 * {
@@ -89,10 +126,10 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: 
   display: flex;
   justify-content: space-between;
   align-items: center;
-  transition: background 120ms ease, color 120ms ease;
+  transition: background var(--ikk-speed) ease, color var(--ikk-speed) ease;
 }
 
-.sidebar nav button:hover { color: var(--ikk-text); background: rgba(255, 255, 255, 0.04); }
+.sidebar nav button:hover { color: var(--ikk-text); background: var(--ikk-surface-hover); }
 .sidebar nav button.active { color: var(--ikk-text); background: var(--ikk-accent-soft); }
 .sidebar nav button:focus-visible { outline: 2px solid var(--ikk-accent); outline-offset: -2px; }
 
@@ -151,9 +188,9 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: 
   border-radius: var(--ikk-radius-sm);
   display: flex;
   justify-content: space-between;
-  transition: background 120ms ease;
+  transition: background var(--ikk-speed) ease;
 }
-.quick-link:hover { background: rgba(255, 255, 255, 0.04); }
+.quick-link:hover { background: var(--ikk-surface-hover); }
 .quick-link:focus-visible { outline: 2px solid var(--ikk-accent); outline-offset: -2px; }
 
 /* ---- buttons ---- */
@@ -164,16 +201,16 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: 
   padding: 8px 16px;
   border-radius: var(--ikk-radius-sm);
   font-size: 13px;
-  transition: background 120ms ease, opacity 120ms ease;
+  transition: background var(--ikk-speed) ease, opacity var(--ikk-speed) ease;
   text-align: center;
 }
 .btn:focus-visible { outline: 2px solid var(--ikk-accent); outline-offset: 2px; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .btn-primary { background: var(--ikk-accent); color: #fff; }
-.btn-primary:hover:not(:disabled) { filter: brightness(1.12); }
+.btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
 .btn-secondary { border: 1px solid var(--ikk-border); color: var(--ikk-text); }
-.btn-secondary:hover:not(:disabled) { background: rgba(255, 255, 255, 0.04); }
+.btn-secondary:hover:not(:disabled) { background: var(--ikk-surface-hover); }
 .btn-danger { border: 1px solid transparent; color: var(--ikk-danger); }
 .btn-danger:hover:not(:disabled) { background: rgba(255, 107, 107, 0.1); }
 .btn-ghost { color: var(--ikk-muted); }
@@ -186,6 +223,9 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: 
   color: inherit;
 }
 
+.linkish-ext { color: var(--ikk-accent); text-decoration: none; }
+.linkish-ext:hover { text-decoration: underline; }
+
 /* ---- banners / states ---- */
 
 .banner {
@@ -197,6 +237,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: 
 .banner-info { background: var(--ikk-accent-soft); }
 .banner-warn { background: rgba(255, 180, 84, 0.1); color: var(--ikk-warn); }
 .banner-error { background: rgba(255, 107, 107, 0.1); color: var(--ikk-danger); }
+.banner-success { background: rgba(110, 231, 160, 0.1); color: var(--ikk-success); }
 
 .spinner-row { display: flex; align-items: center; gap: 10px; color: var(--ikk-muted); padding: 20px 0; }
 .spinner {
@@ -229,7 +270,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: 
   border: 1px solid var(--ikk-border);
   border-radius: var(--ikk-radius);
   padding: 12px 16px;
-  transition: border-color 120ms ease;
+  transition: border-color var(--ikk-speed) ease;
 }
 .instance-row.selected { border-color: var(--ikk-accent); }
 
@@ -262,10 +303,11 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: 
 
 .dialog {
   width: min(460px, calc(100vw - 32px));
-  background: var(--ikk-surface-2);
+  background: var(--ikk-surface-elevated);
   border: 1px solid var(--ikk-border);
   border-radius: var(--ikk-radius);
   padding: 18px 20px;
+  box-shadow: var(--ikk-shadow-dialog);
 }
 
 .dialog-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
@@ -277,7 +319,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: 
   padding: 2px 6px;
   border-radius: var(--ikk-radius-sm);
 }
-.dialog-close:hover { color: var(--ikk-text); background: rgba(255, 255, 255, 0.05); }
+.dialog-close:hover { color: var(--ikk-text); background: var(--ikk-surface-hover); }
 
 .dialog-body { display: flex; flex-direction: column; gap: 12px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
@@ -297,6 +339,47 @@ input, select {
 }
 input:focus-visible, select:focus-visible { outline: 2px solid var(--ikk-accent); outline-offset: -1px; }
 
+/* ---- switch (settings toggles) ---- */
+
+.setting-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 0;
+}
+.setting-row + .setting-row { border-top: 1px solid var(--ikk-border); }
+.setting-copy { display: flex; flex-direction: column; gap: 2px; }
+.setting-name { font-weight: 600; }
+.setting-hint { font-size: 12px; color: var(--ikk-muted); }
+
+.switch {
+  all: unset;
+  cursor: pointer;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--ikk-surface-elevated);
+  border: 1px solid var(--ikk-border);
+  position: relative;
+  transition: background var(--ikk-speed) ease, border-color var(--ikk-speed) ease;
+  flex-shrink: 0;
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ikk-muted);
+  transition: transform var(--ikk-speed) ease, background var(--ikk-speed) ease;
+}
+.switch[aria-checked="true"] { background: var(--ikk-accent-soft); border-color: var(--ikk-accent); }
+.switch[aria-checked="true"]::after { transform: translateX(16px); background: var(--ikk-accent); }
+.switch:focus-visible { outline: 2px solid var(--ikk-accent); outline-offset: 2px; }
+
 /* ---- settings ---- */
 
 .theme-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
@@ -311,21 +394,22 @@ input:focus-visible, select:focus-visible { outline: 2px solid var(--ikk-accent)
   display: flex;
   flex-direction: column;
   gap: 4px;
-  transition: border-color 120ms ease;
+  transition: border-color var(--ikk-speed) ease;
 }
 .theme-card:hover { border-color: var(--ikk-muted); }
 .theme-card.active { border-color: var(--ikk-accent); }
 .theme-card:focus-visible { outline: 2px solid var(--ikk-accent); outline-offset: 2px; }
 
 .theme-swatch { height: 26px; border-radius: 4px; border: 1px solid var(--ikk-border); }
-.theme-amoled .theme-swatch { background: #000; }
+.theme-amoled .theme-swatch {
+  background: radial-gradient(circle at 80% 20%, rgba(255, 92, 138, 0.5), #000 70%);
+}
 .theme-modern .theme-swatch { background: #15151a; }
 .theme-sakura .theme-swatch {
-  background: radial-gradient(circle at 80% 20%, rgba(255, 92, 138, 0.55), #000 70%);
+  background: radial-gradient(circle at 80% 20%, rgba(255, 133, 176, 0.65), #000 70%);
 }
 .theme-name { font-weight: 600; }
 
 .about-list { display: grid; grid-template-columns: auto 1fr; gap: 4px 18px; margin: 0; }
 .about-list dt { color: var(--ikk-muted); }
 .about-list dd { margin: 0; }
-.about-note { margin: 14px 0 0; font-size: 12px; }
