@@ -11,8 +11,8 @@ repository.workspace = true
 tauri-build.workspace = true
 
 [dependencies]
-ikk-core = { path = "../../crates/ikk-core" }
-ikk-api-types = { path = "../../crates/ikk-api-types" }
+ikk-core = { path = "../../../crates/ikk-core" }
+ikk-api-types = { path = "../../../crates/ikk-api-types" }
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true
