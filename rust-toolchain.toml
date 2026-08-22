@@ -1,0 +1,13 @@
+# Isekaiyo repository-controlled Rust toolchain.
+#
+# POLICY (docs/development/getting-started.md):
+# - We track the `stable` channel and deliberately hard-pin an exact patch
+#   ONLY after the first green CI baseline proves all workspace dependencies
+#   build with it. Pinning a guessed version today would risk breaking every
+#   developer's build; tracking stable keeps us installable.
+# - Revisit after Phase 1 CI baseline (tracked in docs/roadmap.md M1).
+# - MSRV for library crates is declared in Cargo.toml (`rust-version`).
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

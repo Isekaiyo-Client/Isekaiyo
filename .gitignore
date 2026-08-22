@@ -1,0 +1,34 @@
+# Dependencies / build output
+node_modules/
+dist/
+target/
+*.tsbuildinfo
+
+# Local env & secrets — never commit real values
+.env
+.env.*
+!.env.example
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.recommended.json
+*.swp
+*.swo
+
+# Logs / temp
+*.log
+tmp/
+.cache/
+
+# Isekaiyo dev sandbox data (isolated test dirs — see docs/development/getting-started.md)
+IsekaiyoDev/
+
+# Tauri generated
+apps/launcher/src-tauri/gen/

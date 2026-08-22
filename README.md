@@ -22,7 +22,7 @@ Start reading here:
 | [Vision](docs/vision.md) | Product identity, philosophy, personas, principles |
 | [Architecture](docs/architecture.md) | System layers, crate boundaries, domain model, data flows |
 | [Roadmap](docs/roadmap.md) | Dependency-driven phases and the MVP |
-| [Development](docs/development.md) | How to build, test, and work in the repository |
+| [Development](docs/development/getting-started.md) | How to build, test, and work in the repository |
 
 ## Non-negotiables
 

@@ -1,0 +1,29 @@
+name: Architecture Proposal
+description: Propose or challenge an architectural decision (leads to an ADR)
+labels: ["architecture"]
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Context & problem
+      description: What forces are in tension? Link relevant docs/ADRs.
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Options considered
+      description: Include tradeoffs; cite primary sources for external claims.
+    validations:
+      required: true
+  - type: textarea
+    id: recommendation
+    attributes:
+      label: Recommended option & reasoning
+    validations:
+      required: true
+  - type: textarea
+    id: consequences
+    attributes:
+      label: Consequences & risks
+      description: What becomes easier? What becomes harder? Reversibility?

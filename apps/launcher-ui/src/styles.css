@@ -1,0 +1,82 @@
+/* Milestone-1 shell styles. Deliberately minimal: dark, flat, restrained.
+   The full theme engine (docs/vision.md §Theming) replaces these tokens later;
+   they are already named as custom properties so the migration is mechanical. */
+:root {
+  --ikk-bg: #000000;
+  --ikk-surface: #0a0a0c;
+  --ikk-border: #1d1d22;
+  --ikk-text: #e8e8ec;
+  --ikk-muted: #8b8b95;
+  --ikk-accent: #7f5cff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--ikk-bg);
+  color: var(--ikk-text);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  height: 100vh;
+}
+
+.sidebar {
+  background: var(--ikk-surface);
+  border-right: 1px solid var(--ikk-border);
+  padding: 16px 10px;
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.35em;
+  padding: 4px 10px 18px;
+}
+
+.sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar button {
+  all: unset;
+  cursor: pointer;
+  padding: 9px 12px;
+  border-radius: 6px;
+  color: var(--ikk-muted);
+}
+
+.sidebar button:hover {
+  color: var(--ikk-text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.sidebar button.active {
+  color: var(--ikk-text);
+  background: rgba(127, 92, 255, 0.12);
+}
+
+.content {
+  padding: 28px 32px;
+}
+
+.content h1 {
+  margin-top: 0;
+  font-size: 20px;
+}
+
+.muted {
+  color: var(--ikk-muted);
+}
+
+.error {
+  color: #ff6b6b;
+}

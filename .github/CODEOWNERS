@@ -1,0 +1,14 @@
+# Initial ownership map.
+# The primary maintainer retains administrative control (docs/development/github-workflow.md).
+# Replace @Isekaiyo-Client/maintainers with individual handles once roles are assigned.
+# Per-area owners can be added as the team grows — do not grant admin to contributors.
+
+*                               @Isekaiyo-Client/maintainers
+
+# Architecture decisions require maintainer review by definition
+/docs/decisions/                @Isekaiyo-Client/maintainers
+/docs/architecture.md           @Isekaiyo-Client/maintainers
+
+# Security-sensitive paths
+/apps/launcher/src-tauri/       @Isekaiyo-Client/maintainers
+/crates/                        @Isekaiyo-Client/maintainers

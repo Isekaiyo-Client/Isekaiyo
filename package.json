@@ -1,0 +1,17 @@
+{
+  "name": "isekaiyo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Isekaiyo — open-source cross-platform Minecraft launcher + client platform (monorepo root)",
+  "packageManager": "pnpm@10.33.3",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter launcher-ui dev",
+    "build": "pnpm --filter launcher-ui build",
+    "typecheck": "pnpm --filter launcher-ui typecheck",
+    "lint": "pnpm --filter launcher-ui lint",
+    "doctor": "sh ./scripts/doctor.sh"
+  }
+}
