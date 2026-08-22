@@ -11,6 +11,61 @@ pub use ikk_core::config::{AppConfig, LoadSource, StartPage, Theme};
 pub use ikk_core::instance::{Instance, LoaderKind, LoaderSpec};
 pub use ikk_core::store::{InstanceListing, LoaderKindInput};
 
+// ---------------------------------------------------------------------------
+// Version & loader metadata DTOs (Phase 3/5)
+// ---------------------------------------------------------------------------
+
+/// One entry of the Mojang version manifest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersionEntryDto {
+    pub id: String,
+    /// "release" | "snapshot" | "old_beta" | "old_alpha"
+    pub kind: String,
+}
+
+/// The version list plus where it came from:
+/// `cache` (fresh) · `network` (just refreshed) · `stale-cache` (offline).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersionListDto {
+    pub source: String,
+    pub entries: Vec<VersionEntryDto>,
+}
+
+/// One selectable loader version from a loader meta service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoaderVersionDto {
+    pub version: String,
+    pub stable: bool,
+}
+
+/// Result of an installation run. Every failed artifact is named so the UI
+/// can offer repair instead of a generic failure.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InstallReportDto {
+    pub downloaded: u32,
+    pub skipped: u32,
+    pub total_files: u32,
+    pub failed: Vec<String>,
+}
+
+/// How a game run ended (`process::GameExit` projection).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameExitDto {
+    pub exit_code: Option<i32>,
+    pub user_stopped: bool,
+    /// "completed" | "crashed" | "user-stopped"
+    pub category: String,
+}
+
+/// Current launch pipeline state for the UI state machine display.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LaunchStatusDto {
+    pub phase: String,
+    pub pid: Option<u32>,
+    pub exit: Option<GameExitDto>,
+    pub log_path: Option<String>,
+}
+
 /// Serializable projection of [`ikk_core::Error`] for command failures.
 /// `code` is the stable taxonomy string (`instance.invalid`, …) so the UI can
 /// branch on category without parsing messages.

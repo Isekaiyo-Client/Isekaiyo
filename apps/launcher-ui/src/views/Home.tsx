@@ -1,10 +1,36 @@
-// Home — the launcher dashboard. The Play control is wired to the real
-// `launch_instance` command; until the Minecraft runtime milestone lands the
-// core answers with `runtime.unavailable`, which we surface honestly instead
-// of faking progress.
-import { useState } from "react";
-import { launchInstance, toErrorMessage, type CommandError, type Instance } from "../api";
-import { Banner, Button, EmptyState } from "../components/ui";
+// Home — the launcher dashboard. Play runs the REAL pipeline: install (if
+// needed) → Java resolution → launch plan → Minecraft process, with live
+// phase/status polling and a console view of actual game output.
+// Identity is an offline profile for now (clearly labeled); Microsoft auth
+// is a later milestone and is never faked.
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  installInstance,
+  launchInstance,
+  launchStatus,
+  readLaunchLog,
+  stopLaunch,
+  toErrorMessage,
+  type Instance,
+  type LaunchStatusDto,
+} from "../api";
+import { Banner, Button, Dialog, EmptyState, Field, Spinner } from "../components/ui";
+
+const PHASE_TEXT: Record<string, string> = {
+  idle: "Idle",
+  preparing: "Preparing…",
+  "resolving-metadata": "Resolving Minecraft metadata…",
+  downloading: "Downloading files…",
+  verifying: "Verifying files…",
+  "resolving-java": "Resolving Java runtime…",
+  "building-plan": "Building launch plan…",
+  starting: "Starting Minecraft…",
+  running: "Minecraft is running",
+  stopping: "Stopping Minecraft…",
+  completed: "Minecraft exited normally",
+  failed: "Minecraft crashed",
+  cancelled: "Launch cancelled",
+};
 
 export function Home({
   instances,
@@ -17,22 +43,93 @@ export function Home({
   onNavigate: (section: "instances" | "settings") => void;
   onSelect: (id: string | null) => void;
 }) {
-  const [launching, setLaunching] = useState(false);
-  const [notice, setNotice] = useState<{ kind: "warn" | "error"; text: string } | null>(null);
+  const [username, setUsername] = useState("");
+  const [showIdentityDialog, setShowIdentityDialog] = useState(false);
+  const [working, setWorking] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ kind: "warn" | "error" | "info"; text: string } | null>(
+    null,
+  );
+  const [status, setStatus] = useState<LaunchStatusDto | null>(null);
+  const [logText, setLogText] = useState<string>("");
+  const [showConsole, setShowConsole] = useState(false);
+  const pollRef = useRef<number | null>(null);
+
   const active = instances.find((i) => i.id === selected) ?? null;
 
-  async function play() {
-    if (!active) return;
-    setLaunching(true);
-    setNotice(null);
+  // Poll launch status while a launch is in flight or the game runs.
+  const poll = useCallback(async () => {
     try {
-      await launchInstance(active.id);
-      // Unreachable today; when the runtime exists this is where session UI goes.
+      const s = await launchStatus();
+      setStatus(s);
+      if (s.phase !== "running" && s.phase !== "idle" && s.exit === null) {
+        // keep polling through the pipeline phases
+      } else if (pollRef.current !== null && (s.exit !== null || s.phase === "idle")) {
+        window.clearInterval(pollRef.current);
+        pollRef.current = null;
+        if (s.exit) {
+          setNotice({
+            kind: s.exit.category === "completed" ? "info" : "error",
+            text:
+              s.exit.category === "completed"
+                ? "Minecraft exited normally."
+                : s.exit.category === "user-stopped"
+                  ? "Minecraft was stopped."
+                  : `Minecraft crashed (exit code ${s.exit.exit_code ?? "signal"}). Check the console for details.`,
+          });
+        }
+      }
+    } catch {
+      /* status polling is best-effort */
+    }
+  }, []);
+
+  useEffect(() => {
+    void poll(); // pick up any already-running game after a restart of the UI
+    return () => {
+      if (pollRef.current !== null) window.clearInterval(pollRef.current);
+    };
+  }, [poll]);
+
+  async function launch() {
+    if (!active) return;
+    setNotice(null);
+    setWorking("Preparing…");
+    try {
+      // Install first (cheap when everything is already present).
+      const report = await installInstance(active.id);
+      if (report.failed.length > 0) {
+        setNotice({
+          kind: "error",
+          text: `Installation failed: ${report.failed[0]}`,
+        });
+        return;
+      }
+      setWorking("Starting Minecraft…");
+      const pid = await launchInstance(active.id, username.trim());
+      setNotice({ kind: "info", text: `Minecraft starting (PID ${pid}).` });
+      if (pollRef.current !== null) window.clearInterval(pollRef.current);
+      pollRef.current = window.setInterval(() => void poll(), 2000);
     } catch (e) {
-      const code = (e as Partial<CommandError>)?.code;
-      setNotice({ kind: code === "runtime.unavailable" ? "warn" : "error", text: toErrorMessage(e) });
+      setNotice({ kind: "error", text: toErrorMessage(e) });
     } finally {
-      setLaunching(false);
+      setWorking(null);
+    }
+  }
+
+  function requestPlay() {
+    if (!username.trim()) {
+      setShowIdentityDialog(true);
+      return;
+    }
+    void launch();
+  }
+
+  async function openConsole() {
+    setShowConsole(true);
+    try {
+      setLogText(await readLaunchLog());
+    } catch {
+      setLogText("(log unavailable)");
     }
   }
 
@@ -50,20 +147,46 @@ export function Home({
               <span className="play-name">{active.name}</span>
               <span className="muted">
                 {active.minecraft_version} · {active.loader.kind}
+                {active.loader.version ? ` ${active.loader.version}` : ""}
+              </span>
+              <span className="muted play-note">
+                Offline profile{username ? `: ${username}` : " — you'll be asked for a username"}.
+                Microsoft accounts arrive with the authentication milestone.
               </span>
             </div>
             {notice && <Banner kind={notice.kind}>{notice.text}</Banner>}
+            {status && status.phase !== "idle" && (
+              <div className="status-line" role="status">
+                {PHASE_TEXT[status.phase] ?? status.phase}
+                {status.phase === "running" && status.pid ? ` (PID ${status.pid})` : ""}
+              </div>
+            )}
             <div className="play-actions">
               <Button variant="ghost" onClick={() => onSelect(null)} ariaLabel="Clear selected instance">
                 Clear selection
               </Button>
-              <Button variant="primary" disabled={launching} onClick={() => void play()} ariaLabel={`Play ${active.name}`}>
-                {launching ? "Preparing…" : "▶ Play"}
+              <Button
+                variant="ghost"
+                onClick={() => void openConsole()}
+                disabled={!status || status.phase === "idle"}
+                ariaLabel="Open game console"
+              >
+                Console
               </Button>
+              {status?.phase === "running" ? (
+                <Button
+                  variant="danger"
+                  onClick={() => void stopLaunch()}
+                  ariaLabel={`Stop ${active.name}`}
+                >
+                  ■ Stop
+                </Button>
+              ) : (
+                <Button variant="primary" disabled={working !== null} onClick={requestPlay} ariaLabel={`Play ${active.name}`}>
+                  {working ?? "▶ Play"}
+                </Button>
+              )}
             </div>
-            <p className="muted play-note">
-              The Minecraft runtime is not implemented yet — pressing Play reports that instead of pretending.
-            </p>
           </>
         ) : (
           <EmptyState
@@ -77,7 +200,7 @@ export function Home({
       <div className="home-grid">
         <div className="panel">
           <h2>Recent activity</h2>
-          <p className="muted">No recent activity. Actions you take will appear here.</p>
+          <p className="muted">Launch history lands in the next iteration.</p>
         </div>
         <div className="panel">
           <h2>Quick access</h2>
@@ -91,6 +214,69 @@ export function Home({
           </div>
         </div>
       </div>
+
+      {showIdentityDialog && (
+        <Dialog title="Offline profile" onClose={() => setShowIdentityDialog(false)}>
+          <form
+            className="dialog-body"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setShowIdentityDialog(false);
+              void launch();
+            }}
+          >
+            <Field label="Username (offline profile)">
+              <input
+                value={username}
+                autoFocus
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="Steve"
+                maxLength={16}
+                pattern="[A-Za-z0-9_]{1,16}"
+                aria-label="Offline profile username"
+              />
+            </Field>
+            <p className="muted">
+              This is an <strong>offline profile</strong>: singleplayer and LAN only.
+              Authenticated servers will reject it — Isekaiyo never fakes a premium login.
+            </p>
+            <div className="dialog-actions">
+              <Button variant="ghost" onClick={() => setShowIdentityDialog(false)}>
+                Cancel
+              </Button>
+              <Button variant="primary" type="submit" disabled={!/^[A-Za-z0-9_]{1,16}$/.test(username.trim())}>
+                Continue
+              </Button>
+            </div>
+          </form>
+        </Dialog>
+      )}
+
+      {showConsole && (
+        <Dialog title="Game console" onClose={() => setShowConsole(false)}>
+          <div className="dialog-body">
+            <pre className="console" aria-label="Minecraft output">
+              {logText || <Spinner label="Waiting for output…" />}
+            </pre>
+            <div className="dialog-actions">
+              <Button variant="ghost" onClick={() => void openConsole()}>
+                Refresh
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(logText);
+                }}
+              >
+                Copy
+              </Button>
+              <Button variant="primary" onClick={() => setShowConsole(false)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        </Dialog>
+      )}
     </section>
   );
 }
