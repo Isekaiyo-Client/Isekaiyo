@@ -1,55 +1,169 @@
-import { useEffect, useState } from "react";
-import { getSystemInfo, type SystemInfo } from "./api";
+// App — the application container. Owns data flow (config + instances) and
+// navigation; views render and call back (spec §6/§19). Business logic lives
+// behind the typed API in api.ts, never in views.
+import { useCallback, useEffect, useState } from "react";
+import {
+  getConfig,
+  getStartupInfo,
+  getSystemInfo,
+  listInstances,
+  setConfig,
+  toErrorMessage,
+  type AppConfig,
+  type ConfigLoadInfo,
+  type InstanceListing,
+  type SystemInfo,
+} from "./api";
+import { Banner } from "./components/ui";
+import { Home } from "./views/Home";
+import { Instances } from "./views/Instances";
+import { Placeholder } from "./views/Placeholder";
+import { Settings } from "./views/Settings";
 
-// Milestone-1 shell: navigation skeleton only (spec §23). Real screens arrive
-// with their milestones; do not grow this file into a god component.
-type Section = "Home" | "Instances" | "Mods" | "Worlds" | "Servers" | "Settings";
+type Section = "home" | "instances" | "mods" | "marketplace" | "client" | "settings";
 
-const SECTIONS: readonly Section[] = [
-  "Home",
-  "Instances",
-  "Mods",
-  "Worlds",
-  "Servers",
-  "Settings",
-] as const;
+const NAV: readonly { id: Section; label: string; soon?: boolean }[] = [
+  { id: "home", label: "Home" },
+  { id: "instances", label: "Instances" },
+  { id: "mods", label: "Mods", soon: true },
+  { id: "marketplace", label: "Marketplace", soon: true },
+  { id: "client", label: "Client", soon: true },
+  { id: "settings", label: "Settings" },
+];
 
 export default function App() {
-  const [section, setSection] = useState<Section>("Home");
+  const [section, setSection] = useState<Section>("home");
   const [info, setInfo] = useState<SystemInfo | null>(null);
+  const [config, setConfigState] = useState<AppConfig | null>(null);
+  const [listing, setListing] = useState<InstanceListing | null>(null);
+  const [startup, setStartup] = useState<ConfigLoadInfo | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    getSystemInfo()
-      .then(setInfo)
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  const refreshInstances = useCallback(() => {
+    listInstances()
+      .then(setListing)
+      .catch((e) => setError(toErrorMessage(e)));
   }, []);
 
+  useEffect(() => {
+    void (async () => {
+      try {
+        const [sys, cfg, startupInfo] = await Promise.all([
+          getSystemInfo(),
+          getConfig(),
+          getStartupInfo().catch(() => null), // optional nicety; never blocks startup
+        ]);
+        setInfo(sys);
+        setConfigState(cfg);
+        if (startupInfo) setStartup(startupInfo);
+        setSection(cfg.start_page === "instances" ? "instances" : "home");
+        refreshInstances();
+      } catch (e) {
+        setError(toErrorMessage(e));
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [refreshInstances]);
+
+  async function patchConfig(patch: Partial<AppConfig>) {
+    if (!config) return;
+    const next = { ...config, ...patch };
+    setConfigState(next); // optimistic; core is the source of truth on failure
+    try {
+      const saved = await setConfig(next);
+      setConfigState(saved);
+    } catch (e) {
+      setError(toErrorMessage(e));
+    }
+  }
+
+  function navigate(to: Section) {
+    setSection(to);
+  }
+
+  const startupWarning =
+    startup?.source === "recoveredcorrupt"
+      ? `Your configuration file was malformed and has been reset to defaults. The original file was preserved at: ${startup.corrupt_backup_path ?? "(unknown location)"}`
+      : null;
+
+  if (!config && loading) {
+    return (
+      <div className="boot">
+        <div className="brand">ISEKAIYO</div>
+        <p className="muted">Starting…</p>
+      </div>
+    );
+  }
+
   return (
-    <div className="shell">
+    <div className={`shell theme-${config?.theme ?? "amoled"}`}>
       <aside className="sidebar">
         <div className="brand">ISEKAIYO</div>
-        <nav>
-          {SECTIONS.map((s) => (
+        <nav aria-label="Main">
+          {NAV.map((item) => (
             <button
-              key={s}
-              className={s === section ? "active" : ""}
-              onClick={() => setSection(s)}
+              key={item.id}
+              type="button"
+              className={section === item.id ? "active" : ""}
+              aria-current={section === item.id ? "page" : undefined}
+              onClick={() => navigate(item.id)}
             >
-              {s}
+              <span>{item.label}</span>
+              {item.soon && (
+                <abbr className="soon" title="Under development">
+                  soon
+                </abbr>
+              )}
             </button>
           ))}
         </nav>
-      </aside>
-      <main className="content">
-        <h1>{section}</h1>
-        {error && <p className="error">Backend unreachable: {error}</p>}
-        {info && !error && (
-          <p className="muted">
-            core v{info.app_version} · {info.target} · {info.profile} build
-          </p>
+        {info && (
+          <footer className="sidebar-foot muted">
+            v{info.app_version} · {info.profile}
+          </footer>
         )}
-        {!info && !error && <p className="muted">Connecting to core…</p>}
+      </aside>
+
+      <main className="content">
+        {error && (
+          <Banner kind="error">
+            {error}{" "}
+            <button type="button" className="linkish" onClick={() => setError(null)}>
+              dismiss
+            </button>
+          </Banner>
+        )}
+        {section === "home" && config && (
+          <Home
+            instances={listing?.instances ?? []}
+            selected={config.selected_instance}
+            onNavigate={(s) => navigate(s)}
+            onSelect={(id) => void patchConfig({ selected_instance: id })}
+          />
+        )}
+        {section === "instances" && config && (
+          <Instances
+            listing={listing}
+            loading={loading}
+            error={null}
+            config={config}
+            onSelectedChange={(id) => void patchConfig({ selected_instance: id })}
+            onRefresh={refreshInstances}
+          />
+        )}
+        {(section === "mods" || section === "marketplace" || section === "client") && (
+          <Placeholder section={section.charAt(0).toUpperCase() + section.slice(1)} />
+        )}
+        {section === "settings" && config && (
+          <Settings
+            config={config}
+            onChange={(patch) => void patchConfig(patch)}
+            info={info}
+            startupWarning={startupWarning}
+          />
+        )}
       </main>
     </div>
   );
