@@ -15,6 +15,7 @@ Symptom-indexed; each entry links the fix.
 - Linux `webkit2gtk-4.1` errors → [linux.md](linux.md) distro tables.
 - macOS header errors → `xcode-select --install`, see [macos.md](macos.md).
 - Frontend type errors after pulling → stale build info: delete `apps/launcher-ui/*.tsbuildinfo` and rerun `pnpm typecheck`.
+- **"icons/icon.ico not found" during `tauri-build`** → your checkout is missing `apps/launcher/src-tauri/icons/`. Regenerate: `python3 scripts/generate-icons.py` (see [building](building.md#application-icons)). Never "fix" this by removing icons from the Tauri config.
 
 ## Runtime
 
