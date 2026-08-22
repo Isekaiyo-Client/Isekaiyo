@@ -12,8 +12,12 @@ pub enum ErrorCode {
     NetworkTimeout,
     ChecksumMismatch,
     InstanceCorrupt,
+    InstanceInvalid,
+    InstanceNotFound,
+    ConfigInvalid,
     AuthTokenExpired,
     JavaNotSuitable,
+    IoFailure,
     Internal,
 }
 
@@ -23,8 +27,12 @@ impl ErrorCode {
             ErrorCode::NetworkTimeout => "network.timeout",
             ErrorCode::ChecksumMismatch => "download.checksum_mismatch",
             ErrorCode::InstanceCorrupt => "instance.corrupt",
+            ErrorCode::InstanceInvalid => "instance.invalid",
+            ErrorCode::InstanceNotFound => "instance.not_found",
+            ErrorCode::ConfigInvalid => "config.invalid",
             ErrorCode::AuthTokenExpired => "auth.token_expired",
             ErrorCode::JavaNotSuitable => "java.not_suitable",
+            ErrorCode::IoFailure => "io.failure",
             ErrorCode::Internal => "internal.error",
         }
     }
@@ -46,7 +54,11 @@ pub struct Error {
 
 impl Error {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        Self { code, message: message.into(), source: None }
+        Self {
+            code,
+            message: message.into(),
+            source: None,
+        }
     }
 
     pub fn with_source(
@@ -54,7 +66,11 @@ impl Error {
         message: impl Into<String>,
         source: impl Into<Box<dyn std::error::Error + Send + Sync>>,
     ) -> Self {
-        Self { code, message: message.into(), source: Some(source.into()) }
+        Self {
+            code,
+            message: message.into(),
+            source: Some(source.into()),
+        }
     }
 
     /// Stable machine-readable category. Never changes meaning across releases.
@@ -68,11 +84,15 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error as _;
 
     #[test]
     fn error_codes_are_stable_strings() {
         assert_eq!(ErrorCode::NetworkTimeout.as_str(), "network.timeout");
-        assert_eq!(ErrorCode::ChecksumMismatch.as_str(), "download.checksum_mismatch");
+        assert_eq!(
+            ErrorCode::ChecksumMismatch.as_str(),
+            "download.checksum_mismatch"
+        );
     }
 
     #[test]
@@ -80,6 +100,17 @@ mod tests {
         let e = Error::new(ErrorCode::InstanceCorrupt, "manifest schema mismatch");
         assert_eq!(e.to_string(), "instance.corrupt: manifest schema mismatch");
         assert_eq!(e.code(), ErrorCode::InstanceCorrupt);
+    }
+
+    #[test]
+    fn io_errors_map_to_stable_category() {
+        let e = Error::with_source(
+            ErrorCode::IoFailure,
+            "cannot write config",
+            std::io::Error::other("disk full"),
+        );
+        assert_eq!(e.code().as_str(), "io.failure");
+        assert!(e.source().is_some());
     }
 
     #[test]
