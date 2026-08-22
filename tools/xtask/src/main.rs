@@ -1,10 +1,13 @@
-//! `cargo xtask doctor` — Isekaiyo development environment diagnostic.
+//! `cargo xtask` — Isekaiyo developer tooling.
 //!
-//! Checks every prerequisite from docs/development/getting-started.md and
-//! reports exact remediation for anything missing. It never "fixes" your
-//! system and never reports healthy when something is broken.
+//! Subcommands:
+//! - `doctor` — validate the development environment
+//! - `arch`   — enforce workspace dependency-direction rules
+//!   (docs/architecture/dependency-rules.md)
+//!
+//! Both fail loudly; neither silently "fixes" anything.
 
-use std::process::{Command};
+use std::process::Command;
 
 struct Check {
     name: &'static str,
@@ -72,7 +75,87 @@ fn probe(check: &Check) -> Result<String, String> {
 }
 
 fn main() {
-    println!("Isekaiyo Development Environment");
+    let cmd = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "doctor".to_owned());
+    match cmd.as_str() {
+        "doctor" => doctor(),
+        "arch" => arch::run(),
+        other => {
+            eprintln!("unknown xtask command: {other}");
+            eprintln!("usage: cargo xtask [doctor|arch]");
+            std::process::exit(2);
+        }
+    }
+}
+
+mod arch {
+    //! Dependency-direction enforcement without external crates:
+    //! scan each member manifest for path dependencies and compare the actual
+    //! graph against the allowlist in docs/architecture/dependency-rules.md.
+
+    use std::fs;
+    use std::path::Path;
+
+    /// allowed[dependent] = set of crates it may depend on.
+    const ALLOWED_EDGES: &[(&str, &[&str])] = &[
+        // Core depends on nothing inside the workspace.
+        ("ikk-core", &[]),
+        // DTOs may reference core types only.
+        ("ikk-api-types", &["ikk-core"]),
+        // The application shell composes libraries; libraries never know it.
+        ("ikk-launcher", &["ikk-core", "ikk-api-types"]),
+        // The task runner is standalone by design.
+        ("xtask", &[]),
+    ];
+
+    fn path_deps(manifest: &str) -> Vec<String> {
+        manifest
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("ikk-"))
+            .filter_map(|rest| rest.split_whitespace().next())
+            .map(|name| format!("ikk-{name}"))
+            .collect()
+    }
+
+    pub fn run() {
+        let members = [
+            ("ikk-core", "crates/ikk-core"),
+            ("ikk-api-types", "crates/ikk-api-types"),
+            ("ikk-launcher", "apps/launcher/src-tauri"),
+            ("xtask", "tools/xtask"),
+        ];
+
+        let mut violations = Vec::new();
+        for (name, dir) in members {
+            let manifest_path = Path::new(dir).join("Cargo.toml");
+            let text = fs::read_to_string(&manifest_path)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", manifest_path.display()));
+            for dep in path_deps(&text) {
+                let ok = ALLOWED_EDGES
+                    .iter()
+                    .find(|(from, _)| *from == name)
+                    .is_some_and(|(_, to)| to.contains(&dep.as_str()));
+                if !ok {
+                    violations.push(format!("{name} -> {dep} is not an allowed edge"));
+                }
+            }
+        }
+
+        if violations.is_empty() {
+            println!("Dependency direction OK ({} edges checked).", members.len());
+        } else {
+            eprintln!("Architecture violations:");
+            for v in &violations {
+                eprintln!("  ✗ {v}");
+            }
+            eprintln!("See docs/architecture/dependency-rules.md; changes require an ADR.");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn doctor() {
     println!("{}", "-".repeat(46));
 
     let mut failures = Vec::new();
@@ -91,12 +174,13 @@ fn main() {
         println!("Environment ready.");
     } else {
         println!("{} problem(s) found:", failures.len());
-        for &(name, _) in &failures {
-            let check = CHECKS.iter().find(|c| c.name == name).expect("name came from CHECKS");
-            println!();
-            println!("{name}:");
-            println!("  Required : {}", check.min_hint);
-            println!("  Install  : {}", check.install);
+        for check in CHECKS {
+            if failures.iter().any(|&(name, _)| name == check.name) {
+                println!();
+                println!("{}:", check.name);
+                println!("  Required : {}", check.min_hint);
+                println!("  Install  : {}", check.install);
+            }
         }
         std::process::exit(1);
     }
