@@ -26,7 +26,8 @@ struct AppData {
 }
 
 fn lock(data: &State<'_, Mutex<AppData>>) -> Result<MutexGuard<'_, AppData>, CommandError> {
-    data.lock().map_err(|_| CommandError::internal("application state lock poisoned"))
+    data.lock()
+        .map_err(|_| CommandError::internal("application state lock poisoned"))
 }
 
 // ---------------------------------------------------------------------------
@@ -38,7 +39,12 @@ fn get_system_info() -> SystemInfo {
     SystemInfo {
         app_version: env!("CARGO_PKG_VERSION").to_owned(),
         target: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
-        profile: if cfg!(debug_assertions) { "debug" } else { "release" }.to_owned(),
+        profile: if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        }
+        .to_owned(),
     }
 }
 
@@ -53,7 +59,10 @@ fn get_config(data: State<'_, Mutex<AppData>>) -> Result<AppConfig, CommandError
 }
 
 #[tauri::command]
-fn set_config(data: State<'_, Mutex<AppData>>, config: AppConfig) -> Result<AppConfig, CommandError> {
+fn set_config(
+    data: State<'_, Mutex<AppData>>,
+    config: AppConfig,
+) -> Result<AppConfig, CommandError> {
     let app = lock(&data)?;
     app.config_store.save(&config)?;
     info!("configuration updated");
@@ -79,7 +88,10 @@ fn create_instance(
 }
 
 #[tauri::command]
-fn update_instance(data: State<'_, Mutex<AppData>>, instance: Instance) -> Result<Instance, CommandError> {
+fn update_instance(
+    data: State<'_, Mutex<AppData>>,
+    instance: Instance,
+) -> Result<Instance, CommandError> {
     let app = lock(&data)?;
     app.instance_store.update(&instance)?;
     info!(id = %instance.id, "instance updated");
@@ -112,7 +124,9 @@ pub fn run() {
     let data_dir = match ikk_core::platform::data_dir() {
         Some(dir) => dir,
         None => {
-            error!("fatal: could not resolve a platform data directory (set IKK_DATA_DIR to override)");
+            error!(
+                "fatal: could not resolve a platform data directory (set IKK_DATA_DIR to override)"
+            );
             std::process::exit(1);
         }
     };
@@ -144,7 +158,11 @@ pub fn run() {
 
     // 5. UI.
     tauri::Builder::default()
-        .manage(Mutex::new(AppData { config_store, instance_store, startup_info }))
+        .manage(Mutex::new(AppData {
+            config_store,
+            instance_store,
+            startup_info,
+        }))
         .invoke_handler(tauri::generate_handler![
             get_system_info,
             get_startup_info,
