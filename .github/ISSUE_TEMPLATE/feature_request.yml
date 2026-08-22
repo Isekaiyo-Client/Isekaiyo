@@ -1,0 +1,27 @@
+name: Feature Request
+description: Propose a new capability or improvement
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What can't you do today? Who needs it?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope hints
+      options:
+        - label: This belongs to the first-party client (module idea)
+        - label: This could be a plugin instead of core work
+        - label: This requires changes to documented architecture (link ADR)

@@ -1,0 +1,56 @@
+name: Bug Report
+description: Something is broken or behaves incorrectly
+labels: ["bug", "triage"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Include exact steps to reproduce and expected vs actual behavior.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Launcher UI
+        - Launcher core (Rust)
+        - Instances
+        - Downloads / versions
+        - Authentication / accounts
+        - Java management
+        - Mods / loaders
+        - Client modules
+        - Docs / website
+        - Build / CI
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Isekaiyo version / commit
+      placeholder: "0.1.0 or commit sha"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Windows 11 24H2 / Ubuntu 24.04 / macOS 15 (Apple Silicon)"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / diagnostics
+      description: Attach a redacted diagnostics bundle. NEVER paste tokens or account data.
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues first
+          required: true
+        - label: My logs contain no secrets/credentials
+          required: true

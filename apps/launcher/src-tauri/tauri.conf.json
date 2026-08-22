@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Isekaiyo",
+  "version": "0.1.0",
+  "identifier": "app.isekaiyo.launcher.dev",
+  "build": {
+    "beforeDevCommand": "pnpm --filter launcher-ui dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "pnpm --filter launcher-ui build",
+    "frontendDist": "../../launcher-ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Isekaiyo",
+        "width": 1100,
+        "height": 720,
+        "minWidth": 820,
+        "minHeight": 560
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": []
+  }
+}

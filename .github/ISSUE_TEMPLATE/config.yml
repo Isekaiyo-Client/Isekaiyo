@@ -1,0 +1,10 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Isekaiyo-Client/Isekaiyo/security/advisories/new
+    about: >
+      Do NOT open a public issue for security problems. Use private security
+      advisories — see SECURITY.md for the disclosure process.
+  - name: Questions / help
+    url: https://github.com/Isekaiyo-Client/Isekaiyo/discussions
+    about: Ask questions in Discussions before filing an issue.
