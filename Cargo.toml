@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/ikk-core",
+    "crates/ikk-minecraft",
     "crates/ikk-api-types",
     "apps/launcher/src-tauri",
     "tools/xtask",
@@ -23,6 +24,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tauri = { version = "2", features = [] }
 tauri-build = "2"
+sha1 = "0.10"
+md-5 = "0.10"
+ureq = { version = "2", default-features = false, features = ["tls"] }
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
