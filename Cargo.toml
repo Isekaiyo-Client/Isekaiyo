@@ -11,7 +11,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
-license = "TBD"            # ADR-0009 (provisional MIT OR Apache-2.0) — do not distribute binaries until resolved
+license = "GPL-3.0-or-later"  # ADR-0009 (Accepted): repository LICENSE is GPL-3.0 (owner decision)
 repository = "https://github.com/Isekaiyo-Client/Isekaiyo"
 authors = ["Isekaiyo contributors"]
 
