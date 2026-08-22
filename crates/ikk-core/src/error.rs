@@ -11,12 +11,14 @@ use std::fmt;
 pub enum ErrorCode {
     NetworkTimeout,
     ChecksumMismatch,
+    MetadataInvalid,
     InstanceCorrupt,
     InstanceInvalid,
     InstanceNotFound,
     ConfigInvalid,
     AuthTokenExpired,
     JavaNotSuitable,
+    JavaNotFound,
     IoFailure,
     Internal,
 }
@@ -26,12 +28,14 @@ impl ErrorCode {
         match self {
             ErrorCode::NetworkTimeout => "network.timeout",
             ErrorCode::ChecksumMismatch => "download.checksum_mismatch",
+            ErrorCode::MetadataInvalid => "metadata.invalid",
             ErrorCode::InstanceCorrupt => "instance.corrupt",
             ErrorCode::InstanceInvalid => "instance.invalid",
             ErrorCode::InstanceNotFound => "instance.not_found",
             ErrorCode::ConfigInvalid => "config.invalid",
             ErrorCode::AuthTokenExpired => "auth.token_expired",
             ErrorCode::JavaNotSuitable => "java.not_suitable",
+            ErrorCode::JavaNotFound => "java.not_found",
             ErrorCode::IoFailure => "io.failure",
             ErrorCode::Internal => "internal.error",
         }
