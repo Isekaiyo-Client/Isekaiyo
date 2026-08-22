@@ -25,7 +25,7 @@ struct AppData {
     startup_info: ConfigLoadInfo,
 }
 
-fn lock(data: &State<'_, Mutex<AppData>>) -> Result<MutexGuard<'_, AppData>, CommandError> {
+fn lock<'a>(data: &'a State<'a, Mutex<AppData>>) -> Result<MutexGuard<'a, AppData>, CommandError> {
     data.lock()
         .map_err(|_| CommandError::internal("application state lock poisoned"))
 }
