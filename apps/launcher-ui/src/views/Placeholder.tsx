@@ -12,6 +12,9 @@ const DESCRIPTIONS: Record<string, ReactNode> = {
   Client:
     "Isekaiyo's first-party client (HUD modules, PvP tools, performance features) is its own major " +
     "workstream — see docs/client-architecture.md. Nothing here is functional yet.",
+  Accounts:
+    "Microsoft account sign-in (official OAuth flow, no passwords ever enter Isekaiyo) and local " +
+    "offline profiles arrive with the authentication milestone. Nothing here is functional yet.",
 };
 
 export function Placeholder({ section }: { section: string }) {

@@ -15,12 +15,21 @@ import {
   type SystemInfo,
 } from "./api";
 import { Banner } from "./components/ui";
+import { About } from "./views/About";
 import { Home } from "./views/Home";
 import { Instances } from "./views/Instances";
 import { Placeholder } from "./views/Placeholder";
 import { Settings } from "./views/Settings";
 
-type Section = "home" | "instances" | "mods" | "marketplace" | "client" | "settings";
+type Section =
+  | "home"
+  | "instances"
+  | "mods"
+  | "marketplace"
+  | "client"
+  | "accounts"
+  | "settings"
+  | "about";
 
 const NAV: readonly { id: Section; label: string; soon?: boolean }[] = [
   { id: "home", label: "Home" },
@@ -28,7 +37,9 @@ const NAV: readonly { id: Section; label: string; soon?: boolean }[] = [
   { id: "mods", label: "Mods", soon: true },
   { id: "marketplace", label: "Marketplace", soon: true },
   { id: "client", label: "Client", soon: true },
+  { id: "accounts", label: "Accounts", soon: true },
   { id: "settings", label: "Settings" },
+  { id: "about", label: "About" },
 ];
 
 export default function App() {
@@ -98,7 +109,9 @@ export default function App() {
   }
 
   return (
-    <div className={`shell theme-${config?.theme ?? "amoled"}`}>
+    <div
+      className={`shell theme-${config?.theme ?? "amoled"}${config?.animations_enabled === false ? " no-anim" : ""}`}
+    >
       <aside className="sidebar">
         <div className="brand">ISEKAIYO</div>
         <nav aria-label="Main">
@@ -153,14 +166,14 @@ export default function App() {
             onRefresh={refreshInstances}
           />
         )}
-        {(section === "mods" || section === "marketplace" || section === "client") && (
+        {(section === "mods" || section === "marketplace" || section === "client" || section === "accounts") && (
           <Placeholder section={section.charAt(0).toUpperCase() + section.slice(1)} />
         )}
+        {section === "about" && <About info={info} />}
         {section === "settings" && config && (
           <Settings
             config={config}
             onChange={(patch) => void patchConfig(patch)}
-            info={info}
             startupWarning={startupWarning}
           />
         )}

@@ -106,6 +106,33 @@ fn delete_instance(data: State<'_, Mutex<AppData>>, id: String) -> Result<bool, 
     Ok(deleted)
 }
 
+/// The launch boundary (Phase 2, spec §4): a real command with the real
+/// domain check today, and an explicit, stable `runtime.unavailable` error
+/// until the Minecraft runtime milestone lands. The frontend calls this from
+/// Play — no fake progress animations, ever.
+#[tauri::command]
+fn launch_instance(data: State<'_, Mutex<AppData>>, id: String) -> Result<(), CommandError> {
+    let app = lock(&data)?;
+    let exists = app
+        .instance_store
+        .list()
+        .instances
+        .iter()
+        .any(|instance| instance.id.as_str() == id);
+    if !exists {
+        return Err(ikk_core::Error::new(
+            ikk_core::ErrorCode::InstanceNotFound,
+            format!("no instance with id {id}"),
+        )
+        .into());
+    }
+    info!(%id, "launch requested — runtime layer not yet implemented");
+    Err(CommandError::runtime_unavailable(
+        "Launching is not available yet: the Minecraft runtime layer arrives in a later \
+         milestone. Your instance is saved and will be launchable then.",
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // Startup sequence
 // ---------------------------------------------------------------------------
@@ -171,7 +198,8 @@ pub fn run() {
             list_instances,
             create_instance,
             update_instance,
-            delete_instance
+            delete_instance,
+            launch_instance
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

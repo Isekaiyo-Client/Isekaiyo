@@ -21,6 +21,8 @@ export interface AppConfig {
   theme: Theme;
   start_page: StartPage;
   selected_instance: string | null;
+  confirm_before_delete: boolean;
+  animations_enabled: boolean;
 }
 
 export interface ConfigLoadInfo {
@@ -54,7 +56,8 @@ export interface LoaderInput {
   version: string | null;
 }
 
-/** Serializable projection of ikk-core::Error (stable `code` categories). */
+/** Serializable projection of ikk-core::Error (stable `code` categories).
+ *  `runtime.unavailable` = domain exists, runtime implementation does not yet. */
 export interface CommandError {
   code: string;
   message: string;
@@ -109,4 +112,10 @@ export function updateInstance(instance: Instance): Promise<Instance> {
 
 export function deleteInstance(id: string): Promise<boolean> {
   return invoke<boolean>("delete_instance", { id });
+}
+
+/** Ask the core to launch an instance. Resolves only if a runtime exists;
+ *  today it rejects with `code: "runtime.unavailable"` (honest by design). */
+export function launchInstance(id: string): Promise<void> {
+  return invoke<void>("launch_instance", { id });
 }

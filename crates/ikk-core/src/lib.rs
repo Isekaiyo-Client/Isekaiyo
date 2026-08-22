@@ -12,6 +12,7 @@ pub mod instance;
 pub mod platform;
 pub mod store;
 pub mod task;
+pub mod version;
 
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -19,3 +20,4 @@ pub(crate) mod test_support;
 pub use error::{Error, ErrorCode, Result};
 pub use ids::{InstanceId, MinecraftVersionId};
 pub use instance::{Instance, LoaderKind, LoaderSpec};
+pub use version::{MinecraftVersion, VersionKind};

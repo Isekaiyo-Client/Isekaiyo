@@ -2,6 +2,22 @@
 
 Status: **Accepted** · Phase 0 deliverable · Deep-dive companions: [launcher](launcher-architecture.md) · [client](client-architecture.md) · [instances](instance-architecture.md) · [versions](version-architecture.md)
 
+## 0. Implementation Status (Phase 2)
+
+This document describes the *target* architecture. What actually exists in code today:
+
+| Piece | Status | Where |
+|---|---|---|
+| UI ↔ core typed IPC boundary | **real** (8+2 commands) | `apps/launcher/src-tauri/src/lib.rs` ↔ `crates/ikk-api-types` ↔ `apps/launcher-ui/src/api.ts` |
+| Versioned config with corrupt-recovery + migration | **real** — schema v2 (`confirm_before_delete`, `animations_enabled`) | `ikk-core::config` |
+| Instance domain model + JSON persistence | **real** — CRUD, validation, atomic writes | `ikk-core::instance`, `ikk-core::store` |
+| Typed Minecraft version model | **real** — classification + path-safety validation; metadata/discovery later | `ikk-core::version` |
+| Launch boundary | **real command, honest refusal** — validates the instance, then answers `runtime.unavailable`; no runtime exists yet | `launch_instance` command |
+| Application services layer as separate crates | **not yet** — commands are thin and logic lives in ikk-core; split when a second consumer appears | — |
+| Downloads / auth / loaders / marketplace | **designed only** — see companion docs; deliberately not stubbed | — |
+
+Rule of thumb: nothing in the repo pretends to work. Unavailable capabilities surface `runtime.unavailable` to the UI, which renders an explicit "not built yet" state.
+
 ## 1. System Overview
 
 Isekaiyo is a desktop application with an explicit three-tier boundary:
