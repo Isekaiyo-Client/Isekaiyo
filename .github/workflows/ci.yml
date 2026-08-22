@@ -67,5 +67,8 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      - name: Tests (vitest)
+        run: pnpm --filter launcher-ui test
+
       - name: Build
         run: pnpm build
