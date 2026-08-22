@@ -8,7 +8,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+ikk-core = { path = "../ikk-core" }
 serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true
