@@ -92,17 +92,16 @@ impl ManifestCache {
             Ok(raw) => raw,
             Err(_) => return Ok(None), // no cache yet — not an error
         };
-        let cached: CachedManifest =
-            serde_json::from_str(&raw).map_err(|e| {
-                Error::with_source(
-                    ErrorCode::MetadataInvalid,
-                    format!(
-                        "cached version manifest at {} is corrupt; delete it to recover",
-                        self.path.display()
-                    ),
-                    e,
-                )
-            })?;
+        let cached: CachedManifest = serde_json::from_str(&raw).map_err(|e| {
+            Error::with_source(
+                ErrorCode::MetadataInvalid,
+                format!(
+                    "cached version manifest at {} is corrupt; delete it to recover",
+                    self.path.display()
+                ),
+                e,
+            )
+        })?;
         Ok(Some(cached))
     }
 

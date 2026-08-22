@@ -229,13 +229,7 @@ fn map_ureq(url: &str) -> impl Fn(ureq::Error) -> Error + '_ {
 }
 
 fn map_io(url: &str) -> impl Fn(std::io::Error) -> Error + '_ {
-    move |e| {
-        Error::with_source(
-            ErrorCode::IoFailure,
-            format!("I/O error during {url}"),
-            e,
-        )
-    }
+    move |e| Error::with_source(ErrorCode::IoFailure, format!("I/O error during {url}"), e)
 }
 
 #[cfg(test)]
@@ -245,7 +239,10 @@ mod tests {
 
     #[test]
     fn hex_and_hash_are_consistent() {
-        assert_eq!(sha1_hex(b"hello"), "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d");
+        assert_eq!(
+            sha1_hex(b"hello"),
+            "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        );
         assert_eq!(hex_encode(&[0xde, 0xad]), "dead");
     }
 

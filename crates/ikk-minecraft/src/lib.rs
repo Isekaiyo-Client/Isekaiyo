@@ -17,21 +17,23 @@ pub mod account;
 pub mod assets;
 pub mod download;
 pub mod java;
+pub mod loaders;
 pub mod manifest;
 pub mod metadata;
+pub mod natives;
 pub mod planner;
 pub mod process;
 pub mod resolve;
 pub mod rules;
 pub mod state;
 
+#[cfg(test)]
+pub(crate) mod test_fixtures;
+
 use ikk_core::Result;
 
 /// Whether a library entry applies on the given platform context.
-pub(crate) fn resolve_lib_rules(
-    lib: &metadata::Library,
-    ctx: &rules::EvalContext,
-) -> bool {
+pub(crate) fn resolve_lib_rules(lib: &metadata::Library, ctx: &rules::EvalContext) -> bool {
     match &lib.rules {
         Some(rule_list) => rules::evaluate(rule_list, ctx),
         None => true,

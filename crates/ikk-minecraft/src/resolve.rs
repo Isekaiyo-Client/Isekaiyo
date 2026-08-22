@@ -75,15 +75,20 @@ pub fn plan_install(meta: &VersionMetadata, cache_root: &Path) -> Result<Install
     let mut artifacts = Vec::new();
 
     // --- client jar ---------------------------------------------------------
-    let client = &meta.downloads.client;
-    artifacts.push(PlannedArtifact {
-        url: client.url.clone(),
-        sha1: Some(client.sha1.clone()),
-        size_hint: client.size,
-        dest: cache_root.join("versions").join(&meta.id).join(format!("{}.jar", meta.id)),
-        kind: ArtifactKind::ClientJar,
-        label: format!("Minecraft {} client", meta.id),
-    });
+    // Loader profiles inherit the client from vanilla — overlay before calling.
+    if let Some(client) = meta.client_download() {
+        artifacts.push(PlannedArtifact {
+            url: client.url.clone(),
+            sha1: Some(client.sha1.clone()),
+            size_hint: client.size,
+            dest: cache_root
+                .join("versions")
+                .join(&meta.id)
+                .join(format!("{}.jar", meta.id)),
+            kind: ArtifactKind::ClientJar,
+            label: format!("Minecraft {} client", meta.id),
+        });
+    }
 
     // --- libraries ----------------------------------------------------------
     for lib in &meta.libraries {
@@ -100,9 +105,21 @@ pub fn plan_install(meta: &VersionMetadata, cache_root: &Path) -> Result<Install
                 kind: ArtifactKind::Library,
                 label: lib.name.clone(),
             });
+        } else if let Some(base_url) = &lib.url {
+            // Fabric/Quilt shape: Maven base URL + coordinate. The layout is
+            // standardized, so the URL/path derivation is deterministic — not
+            // a guess.
+            let (rel_path, full_url) = maven_layout(&lib.name, base_url)?;
+            artifacts.push(PlannedArtifact {
+                url: full_url,
+                sha1: None, // maven-metadata hashes live elsewhere; verified by load success
+                size_hint: 0,
+                dest: cache_root.join("libraries").join(rel_path),
+                kind: ArtifactKind::Library,
+                label: lib.name.clone(),
+            });
         } else if lib.downloads.classifiers.is_none() && lib.natives.is_none() {
-            // Very old metadata sometimes lacks `downloads`; we refuse rather
-            // than guess Maven URLs (documented limitation for pre-1.7 era).
+            // No artifact, no base URL, no natives: unusable entry.
             return Err(Error::new(
                 ErrorCode::MetadataInvalid,
                 format!("library {} has no downloadable artifact", lib.name),
@@ -113,8 +130,11 @@ pub fn plan_install(meta: &VersionMetadata, cache_root: &Path) -> Result<Install
         if let Some(natives_map) = &lib.natives {
             if let Some(classifier) = natives_map.get(rules::os_name()) {
                 let full_classifier = apply_native_suffix(classifier, &ctx);
-                if let Some(native) =
-                    lib.downloads.classifiers.as_ref().and_then(|c| c.get(&full_classifier))
+                if let Some(native) = lib
+                    .downloads
+                    .classifiers
+                    .as_ref()
+                    .and_then(|c| c.get(&full_classifier))
                 {
                     let dest = safe_relative(&native.path, "native artifact path")?;
                     artifacts.push(PlannedArtifact {
@@ -131,17 +151,19 @@ pub fn plan_install(meta: &VersionMetadata, cache_root: &Path) -> Result<Install
     }
 
     // --- asset index --------------------------------------------------------
-    artifacts.push(PlannedArtifact {
-        url: meta.asset_index.url.clone(),
-        sha1: Some(meta.asset_index.sha1.clone()),
-        size_hint: meta.asset_index.size,
-        dest: cache_root
-            .join("assets")
-            .join("indexes")
-            .join(format!("{}.json", meta.asset_index.id)),
-        kind: ArtifactKind::AssetIndex,
-        label: format!("Asset index {}", meta.asset_index.id),
-    });
+    if let Some(index) = meta.asset_index() {
+        artifacts.push(PlannedArtifact {
+            url: index.url.clone(),
+            sha1: Some(index.sha1.clone()),
+            size_hint: index.size,
+            dest: cache_root
+                .join("assets")
+                .join("indexes")
+                .join(format!("{}.json", index.id)),
+            kind: ArtifactKind::AssetIndex,
+            label: format!("Asset index {}", index.id),
+        });
+    }
 
     // --- logging config -----------------------------------------------------
     if let Some(file) = meta.logging_config() {
@@ -166,6 +188,31 @@ pub fn plan_install(meta: &VersionMetadata, cache_root: &Path) -> Result<Install
     })
 }
 
+/// Derive the standard Maven repository layout from a library coordinate:
+/// `g:a:v[:classifier]` + base → `<base>/<g/a/v>/<a>-v[-classifier].jar`.
+/// Returns (relative path, absolute URL).
+pub fn maven_layout(coordinate: &str, base_url: &str) -> Result<(PathBuf, String)> {
+    let parts: Vec<&str> = coordinate.split(':').collect();
+    if parts.len() < 3 {
+        return Err(Error::new(
+            ErrorCode::MetadataInvalid,
+            format!("invalid library coordinate {coordinate:?}"),
+        ));
+    }
+    let group_path = parts[0].replace('.', "/");
+    let artifact = parts[1];
+    let version = parts[2];
+    let classifier = parts.get(3).filter(|c| !c.is_empty());
+    let file_name = match classifier {
+        Some(c) => format!("{artifact}-{version}-{c}.jar"),
+        None => format!("{artifact}-{version}.jar"),
+    };
+    let rel = PathBuf::from(format!("{group_path}/{artifact}/{version}/{file_name}"));
+    let base = base_url.trim_end_matches('/');
+    let url = format!("{base}/{}", rel.to_string_lossy().replace('\\', "/"));
+    Ok((rel, url))
+}
+
 /// Legacy classifiers may contain `${arch}` — resolved to 64/32.
 fn apply_native_suffix(classifier: &str, ctx: &rules::EvalContext) -> String {
     classifier.replace(
@@ -188,7 +235,11 @@ pub fn plan_assets(index: &AssetIndex, cache_root: &Path) -> Vec<PlannedArtifact
             url: AssetIndex::resource_url(hash),
             sha1: Some(hash.to_owned()),
             size_hint: size,
-            dest: cache_root.join("assets").join("objects").join(&hash[..2]).join(hash),
+            dest: cache_root
+                .join("assets")
+                .join("objects")
+                .join(&hash[..2])
+                .join(hash),
             kind: ArtifactKind::Asset,
             label: format!("asset {hash}"),
         })
@@ -212,10 +263,11 @@ mod tests {
         let plan_b = plan_install(&meta, Path::new("/data")).unwrap();
         assert_eq!(plan_a.artifacts.len(), plan_b.artifacts.len());
 
-        // client + 3 always-applicable libs + 1 platform-native + asset index + logging config.
-        // The disallow-linux lib applies everywhere except linux.
+        // client + brigadier + lwjgl(+1 platform native) + asset index +
+        // logging config; the windows-gated lib adds itself + its native on
+        // Windows only.
         let is_linux = rules::os_name() == "linux";
-        let expected = if is_linux { 7 } else { 8 };
+        let expected = if is_linux { 6 } else { 8 };
         assert_eq!(plan_a.artifacts.len(), expected);
 
         let client = plan_a
@@ -223,7 +275,10 @@ mod tests {
             .iter()
             .find(|a| a.kind == ArtifactKind::ClientJar)
             .unwrap();
-        assert_eq!(client.dest, PathBuf::from("/data/versions/1.20.4/1.20.4.jar"));
+        assert_eq!(
+            client.dest,
+            PathBuf::from("/data/versions/1.20.4/1.20.4.jar")
+        );
         assert_eq!(
             client.sha1.as_deref(),
             Some("3d50c9be6a2f0f1d0e0c9be6a2f0f1d0e0c9be6a")
@@ -234,11 +289,24 @@ mod tests {
     fn exactly_one_platform_native_per_os_rule_lib() {
         let meta = fixture_meta();
         let plan = plan_install(&meta, Path::new("/d")).unwrap();
-        let natives: Vec<_> = plan.artifacts.iter().filter(|a| a.kind == ArtifactKind::NativeJar).collect();
-        assert_eq!(natives.len(), 1, "fixture declares one native per OS");
+        let natives: Vec<_> = plan
+            .artifacts
+            .iter()
+            .filter(|a| a.kind == ArtifactKind::NativeJar)
+            .collect();
+        assert_eq!(
+            natives.len(),
+            1,
+            "fixture declares one native per OS via classifiers"
+        );
         let os = rules::os_name();
+        let expected_classifier = if os == "windows" {
+            "(natives-windows)"
+        } else {
+            "(natives-linux)"
+        };
         assert!(
-            natives[0].label.ends_with(if os == "linux" { "linux" } else { "windows" }),
+            natives[0].label.ends_with(expected_classifier),
             "wrong native selected for {os}: {}",
             natives[0].label
         );
@@ -269,6 +337,47 @@ mod tests {
     }
 
     #[test]
+    fn maven_coordinates_derive_deterministic_paths_and_urls() {
+        let (path, url) = maven_layout(
+            "net.fabricmc:fabric-loader:0.16.9",
+            "https://maven.fabricmc.net/",
+        )
+        .unwrap();
+        assert_eq!(
+            path,
+            PathBuf::from("net/fabricmc/fabric-loader/0.16.9/fabric-loader-0.16.9.jar")
+        );
+        assert_eq!(
+            url,
+            "https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.16.9/fabric-loader-0.16.9.jar"
+        );
+
+        let (path, url) =
+            maven_layout("g:a:1.0:natives-linux", "https://m.example.org/maven").unwrap();
+        assert!(path.ends_with("a-1.0-natives-linux.jar"));
+        assert_eq!(
+            url,
+            "https://m.example.org/maven/g/a/1.0/a-1.0-natives-linux.jar"
+        );
+
+        assert!(maven_layout("bad-coordinate", "https://x/").is_err());
+    }
+
+    #[test]
+    fn fabric_loader_library_resolves_via_maven_layout() {
+        let json = test_fixtures::VERSION_METADATA_JSON.replace(
+            "\"libraries\": [",
+            "\"libraries\": [{\"name\": \"net.fabricmc:fabric-loader:0.16.9\", \"url\": \"https://maven.fabricmc.net/\"},",
+        );
+        let meta = VersionMetadata::parse(&json).unwrap();
+        let plan = plan_install(&meta, Path::new("/data")).unwrap();
+        assert!(plan
+            .artifacts
+            .iter()
+            .any(|a| a.label.contains("fabric-loader")));
+    }
+
+    #[test]
     fn assets_expand_with_hash_layout() {
         let index = AssetIndex::parse(test_fixtures::ASSET_INDEX_JSON).unwrap();
         let assets = plan_assets(&index, Path::new("/data"));
@@ -276,7 +385,14 @@ mod tests {
         let first = &assets[0];
         assert!(first.dest.starts_with("/data/assets/objects"));
         let hash = first.sha1.as_ref().unwrap();
-        let parent = first.dest.parent().unwrap().file_name().unwrap().to_str().unwrap();
+        let parent = first
+            .dest
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert_eq!(parent, &hash[..2], "two-level hash layout");
         assert_eq!(
             first.url,

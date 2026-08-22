@@ -114,8 +114,69 @@ export function deleteInstance(id: string): Promise<boolean> {
   return invoke<boolean>("delete_instance", { id });
 }
 
-/** Ask the core to launch an instance. Resolves only if a runtime exists;
- *  today it rejects with `code: "runtime.unavailable"` (honest by design). */
-export function launchInstance(id: string): Promise<void> {
-  return invoke<void>("launch_instance", { id });
+/** Ask the core to launch an instance with an offline-profile identity.
+ *  Resolves with the game PID once the process starts. */
+export function launchInstance(id: string, username: string): Promise<number> {
+  return invoke<number>("launch_instance", { id, username });
+}
+
+// -- version & loader metadata (Phase 3/5) ------------------------------------
+
+export interface VersionEntryDto {
+  id: string;
+  kind: "release" | "snapshot" | "old_beta" | "old_alpha";
+}
+
+export interface VersionListDto {
+  source: "cache" | "network" | "stale-cache";
+  entries: VersionEntryDto[];
+}
+
+export function listVersions(forceRefresh = false): Promise<VersionListDto> {
+  return invoke<VersionListDto>("list_versions", { forceRefresh });
+}
+
+export interface LoaderVersionDto {
+  version: string;
+  stable: boolean;
+}
+
+export function listLoaderVersions(kind: string, mcVersion: string): Promise<LoaderVersionDto[]> {
+  return invoke<LoaderVersionDto[]>("list_loader_versions", { kind, mcVersion });
+}
+
+export interface InstallReportDto {
+  downloaded: number;
+  skipped: number;
+  total_files: number;
+  failed: string[];
+}
+
+export function installInstance(id: string): Promise<InstallReportDto> {
+  return invoke<InstallReportDto>("install_instance", { id });
+}
+
+export interface GameExitDto {
+  exit_code: number | null;
+  user_stopped: boolean;
+  category: "completed" | "crashed" | "user-stopped";
+}
+
+export interface LaunchStatusDto {
+  phase: string;
+  pid: number | null;
+  exit: GameExitDto | null;
+  log_path: string | null;
+}
+
+export function launchStatus(): Promise<LaunchStatusDto> {
+  return invoke<LaunchStatusDto>("launch_status");
+}
+
+export function stopLaunch(): Promise<boolean> {
+  return invoke<boolean>("stop_launch");
+}
+
+export function readLaunchLog(maxBytes = 65536): Promise<string> {
+  return invoke<string>("read_launch_log", { maxBytes });
 }

@@ -12,18 +12,26 @@ use crate::rules::Rule;
 #[derive(Debug, Clone, Deserialize)]
 pub struct VersionMetadata {
     pub id: String,
+    /// Present on loader profile documents (Fabric/Quilt): they inherit
+    /// everything from the vanilla version they target.
+    #[serde(rename = "inheritsFrom", default)]
+    pub inherits_from: Option<String>,
     #[serde(rename = "type", default)]
     pub version_type: Option<String>,
     #[serde(default)]
     pub release_time: Option<String>,
+    #[serde(rename = "mainClass")]
     pub main_class: String,
     /// Assets version id (e.g. "17") — names the asset index in game args.
     #[serde(default)]
     pub assets: Option<String>,
-    #[serde(default)]
+    #[serde(rename = "javaVersion", default)]
     pub java_version: Option<JavaRequirement>,
+    #[serde(default)]
     pub downloads: Downloads,
-    pub asset_index: AssetIndexRef,
+    /// Absent on loader profile documents — inherited from vanilla.
+    #[serde(rename = "assetIndex", default)]
+    pub asset_index: Option<AssetIndexRef>,
     #[serde(default)]
     pub libraries: Vec<Library>,
     /// Modern (1.13+) structured arguments.
@@ -43,9 +51,11 @@ pub struct JavaRequirement {
     pub major_version: u32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct Downloads {
-    pub client: Downloadable,
+    /// Absent on loader profile documents — inherited from vanilla.
+    #[serde(default)]
+    pub client: Option<Downloadable>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -70,6 +80,10 @@ pub struct AssetIndexRef {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Library {
     pub name: String,
+    /// Base Maven URL (Fabric/Quilt loader libraries use this shape instead
+    /// of a full `downloads.artifact`).
+    #[serde(default)]
+    pub url: Option<String>,
     #[serde(default)]
     pub downloads: LibraryDownloads,
     #[serde(default)]
@@ -132,12 +146,13 @@ pub enum ArgList {
 }
 
 impl ArgumentValue {
-    /// Expand to concrete strings if the rules permit on this platform.
-    pub fn expand(&self, features: &dyn Fn(&str) -> bool) -> Option<Vec<String>> {
+    /// Expand to concrete strings if the rules permit on this platform
+    /// (OS/arch + feature gating all live in the context).
+    pub fn expand(&self, ctx: &crate::rules::EvalContext) -> Option<Vec<String>> {
         match self {
             ArgumentValue::Plain(s) => Some(vec![s.clone()]),
             ArgumentValue::Conditional { rules, value } => {
-                crate::rules::evaluate(rules, features).then(|| match value {
+                crate::rules::evaluate(rules, ctx).then(|| match value {
                     ArgList::One(s) => vec![s.clone()],
                     ArgList::Many(v) => v.clone(),
                 })
@@ -168,6 +183,32 @@ pub struct DownloadableFile {
 }
 
 impl VersionMetadata {
+    /// Merge a loader profile over its vanilla parent (Fabric/Quilt shape):
+    /// the child's mainClass/arguments replace the parent's, libraries and
+    /// logging concatenate. Produces one effective metadata document so the
+    /// resolver/planner never need loader-specific branches.
+    pub fn overlay_on(self, parent: VersionMetadata) -> Self {
+        let mut merged = self;
+        merged.java_version = merged.java_version.or(parent.java_version);
+        merged.downloads.client = merged.downloads.client.or(parent.downloads.client);
+        let mut libs = merged.libraries;
+        libs.extend(parent.libraries);
+        merged.libraries = libs;
+        merged.arguments = match (merged.arguments, parent.arguments) {
+            (Some(mut child), Some(parent_args)) => {
+                child.game.extend(parent_args.game);
+                Some(child)
+            }
+            (Some(child), None) => Some(child),
+            (None, parent_args) => parent_args,
+        };
+        merged.minecraft_arguments = merged.minecraft_arguments.or(parent.minecraft_arguments);
+        merged.logging = merged.logging.or(parent.logging);
+        merged.asset_index = merged.asset_index.or(parent.asset_index);
+        merged.assets = merged.assets.or(parent.assets);
+        merged
+    }
+
     pub fn parse(json: &str) -> Result<Self> {
         let meta: Self = serde_json::from_str(json).map_err(|e| {
             Error::with_source(
@@ -195,6 +236,17 @@ impl VersionMetadata {
             .unwrap_or(8)
     }
 
+    /// The asset index reference, when the document carries one (loader
+    /// profiles inherit it — callers overlay before resolving).
+    pub fn asset_index(&self) -> Option<&AssetIndexRef> {
+        self.asset_index.as_ref()
+    }
+
+    /// The client download, when present (loader profiles inherit it).
+    pub fn client_download(&self) -> Option<&Downloadable> {
+        self.downloads.client.as_ref()
+    }
+
     /// The log4j config file reference, when the version ships one.
     pub fn logging_config(&self) -> Option<&DownloadableFile> {
         self.logging.as_ref().map(|l| &l.client.file)
@@ -219,7 +271,7 @@ mod tests {
         assert_eq!(meta.id, "1.20.4");
         assert_eq!(meta.main_class, "net.minecraft.client.main.Main");
         assert_eq!(meta.required_java_major(), 17);
-        assert_eq!(meta.libraries.len(), 5);
+        assert_eq!(meta.libraries.len(), 3);
         assert!(meta.arguments.is_some());
         assert!(meta.minecraft_arguments.is_none());
         assert_eq!(
@@ -253,6 +305,9 @@ mod tests {
         let meta = VersionMetadata::parse(json).unwrap();
         assert_eq!(meta.required_java_major(), 8);
         assert!(meta.arguments.is_none());
-        assert_eq!(meta.minecraft_arguments.as_deref(), Some("${auth_player_name} ${auth_session}"));
+        assert_eq!(
+            meta.minecraft_arguments.as_deref(),
+            Some("${auth_player_name} ${auth_session}")
+        );
     }
 }

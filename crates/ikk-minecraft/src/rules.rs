@@ -39,7 +39,7 @@ impl Rule {
         }
         if let Some(features) = &self.features {
             for (feature, expected) in features {
-                let actual = (ctx.feature)(*feature);
+                let actual = (ctx.feature)(feature.as_str());
                 if actual != *expected {
                     return false;
                 }
@@ -153,19 +153,26 @@ mod tests {
     }
 
     #[test]
-    fn disallow_linux_excludes_only_linux() {
+    fn rules_present_means_default_deny_when_nothing_matches() {
+        // Launcher-lib consensus semantics: once a rule list exists, the item
+        // applies only when a matching rule allows it. Real metadata uses the
+        // [disallow-all, allow-target] pattern — covered below.
         let rules = vec![rule(Disallow, Some("linux"))];
         assert!(!evaluate(&rules, &linux_ctx()));
-        assert!(evaluate(&rules, &windows_ctx()));
+        assert!(!evaluate(&rules, &windows_ctx()));
     }
 
     #[test]
     fn last_matching_rule_wins() {
-        let rules = vec![rule(Allow, None), rule(Disallow, Some("linux"))];
-        assert!(!evaluate(&rules, &linux_ctx()));
+        // The canonical real-world pattern: deny everywhere, then allow one OS.
+        let rules = vec![rule(Disallow, None), rule(Allow, Some("linux"))];
+        assert!(evaluate(&rules, &linux_ctx()));
+        assert!(!evaluate(&rules, &windows_ctx()));
 
-        let flipped = vec![rule(Disallow, Some("linux")), rule(Allow, None)];
-        assert!(evaluate(&flipped, &linux_ctx()));
+        // Order matters: allow-all first, then deny linux → linux excluded.
+        let flipped = vec![rule(Allow, None), rule(Disallow, Some("linux"))];
+        assert!(!evaluate(&flipped, &linux_ctx()));
+        assert!(evaluate(&flipped, &windows_ctx()));
     }
 
     #[test]
@@ -173,9 +180,7 @@ mod tests {
         let rules = vec![Rule {
             action: Allow,
             os: None,
-            features: Some(
-                [("is_demo_user".to_owned(), true)].into_iter().collect(),
-            ),
+            features: Some([("is_demo_user".to_owned(), true)].into_iter().collect()),
         }];
         let demo = EvalContext {
             os_name: "linux",

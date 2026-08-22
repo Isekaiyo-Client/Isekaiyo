@@ -96,40 +96,40 @@ pub const VERSION_METADATA_JSON: &str = r#"{
     },
     {
       "name": "org.lwjgl:lwjgl:3.3.1",
+      "natives": {
+        "linux": "natives-linux",
+        "windows": "natives-windows",
+        "osx": "natives-linux"
+      },
       "downloads": {
         "artifact": {
           "path": "org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1.jar",
           "url": "https://piston-data.mojang.com/libraries/org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1.jar",
           "sha1": "1111111111111111111111111111111111111111",
           "size": 700000
-        }
-      }
-    },
-    {
-      "name": "org.lwjgl:lwjgl:3.3.1:natives-linux",
-      "downloads": {
-        "artifact": {
-          "path": "org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1-natives-linux.jar",
-          "url": "https://piston-data.mojang.com/libraries/org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1-natives-linux.jar",
-          "sha1": "2222222222222222222222222222222222222222",
-          "size": 90000
-        }
-      }
-    },
-    {
-      "name": "org.lwjgl:lwjgl:3.3.1:natives-windows",
-      "downloads": {
-        "artifact": {
-          "path": "org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1-natives-windows.jar",
-          "url": "https://piston-data.mojang.com/libraries/org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1-natives-windows.jar",
-          "sha1": "3333333333333333333333333333333333333333",
-          "size": 90000
+        },
+        "classifiers": {
+          "natives-linux": {
+            "path": "org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1-natives-linux.jar",
+            "url": "https://piston-data.mojang.com/libraries/org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1-natives-linux.jar",
+            "sha1": "2222222222222222222222222222222222222222",
+            "size": 90000
+          },
+          "natives-windows": {
+            "path": "org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1-natives-windows.jar",
+            "url": "https://piston-data.mojang.com/libraries/org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1-natives-windows.jar",
+            "sha1": "3333333333333333333333333333333333333333",
+            "size": 90000
+          }
         }
       }
     },
     {
       "name": "com.example:legacy-only:1.0",
-      "rules": [{ "action": "disallow", "os": { "name": "linux" } }],
+      "rules": [
+        { "action": "disallow" },
+        { "action": "allow", "os": { "name": "windows" } }
+      ],
       "downloads": {
         "artifact": {
           "path": "com/example/legacy-only/1.0/legacy-only-1.0.jar",

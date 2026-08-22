@@ -101,10 +101,15 @@ mod arch {
     const ALLOWED_EDGES: &[(&str, &[&str])] = &[
         // Core depends on nothing inside the workspace.
         ("ikk-core", &[]),
+        // The Minecraft engine speaks to core's error taxonomy only.
+        ("ikk-minecraft", &["ikk-core"]),
         // DTOs may reference core types only.
         ("ikk-api-types", &["ikk-core"]),
         // The application shell composes libraries; libraries never know it.
-        ("ikk-launcher", &["ikk-core", "ikk-api-types"]),
+        (
+            "ikk-launcher",
+            &["ikk-core", "ikk-api-types", "ikk-minecraft"],
+        ),
         // The task runner is standalone by design.
         ("xtask", &[]),
     ];
@@ -121,6 +126,7 @@ mod arch {
     pub fn run() {
         let members = [
             ("ikk-core", "crates/ikk-core"),
+            ("ikk-minecraft", "crates/ikk-minecraft"),
             ("ikk-api-types", "crates/ikk-api-types"),
             ("ikk-launcher", "apps/launcher/src-tauri"),
             ("xtask", "tools/xtask"),
