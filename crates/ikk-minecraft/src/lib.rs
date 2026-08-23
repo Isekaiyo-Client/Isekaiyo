@@ -12,6 +12,8 @@
 //! - [`planner`] — LaunchPlan construction (JVM + game args); the UI never builds args
 //! - [`process`] — cross-platform spawn/output-capture/exit tracking
 //! - [`state`] — the launch state machine
+//! - [`validate`] — structured instance validation + repair planning
+//! - [`storage`] — memoized directory-size accounting
 //! - [`mods`] — mod management: sources (Modrinth), dependency resolution,
 //!   staged installs, inventory reconciliation, profiles
 
@@ -29,6 +31,8 @@ pub mod process;
 pub mod resolve;
 pub mod rules;
 pub mod state;
+pub mod storage;
+pub mod validate;
 
 #[cfg(test)]
 pub(crate) mod test_fixtures;

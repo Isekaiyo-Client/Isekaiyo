@@ -2,6 +2,17 @@
 //! network: these mirror the real document shapes (version_manifest_v2 and a
 //! modern `1.x` version JSON) with a handful of entries instead of hundreds.
 
+/// Unique temp directory for filesystem tests (id + pid + nanos so parallel
+/// test runs never collide).
+#[cfg(test)]
+pub(crate) fn unique_temp_dir(tag: &str) -> std::path::PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!("ikk-{tag}-{}-{nanos}", std::process::id()))
+}
+
 /// Mirrors https://piston-meta.mojang.com/mc/game/version_manifest_v2.json
 pub const MANIFEST_JSON: &str = r#"{
   "latest": { "release": "1.21.4", "snapshot": "25w05a" },

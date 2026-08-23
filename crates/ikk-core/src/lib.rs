@@ -12,6 +12,7 @@ pub mod instance;
 pub mod platform;
 pub mod store;
 pub mod task;
+pub mod tasks;
 pub mod version;
 
 #[cfg(test)]

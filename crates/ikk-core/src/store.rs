@@ -187,7 +187,7 @@ impl InstanceStore {
         })
     }
 
-    /// Validate and persist an updated instance. The instance must already exist.
+    /// Validate, bump `updated_at`, and persist. The instance must already exist.
     pub fn update(&self, instance: &Instance) -> Result<()> {
         instance.validate()?;
         if !self.path_for(&instance.id).exists() {
@@ -196,7 +196,71 @@ impl InstanceStore {
                 format!("no instance with id {}", instance.id),
             ));
         }
-        self.write(instance)
+        let mut stamped = instance.clone();
+        stamped.updated_at_unix = unix_now();
+        self.write(&stamped)
+    }
+
+    /// Rename: metadata-only change through the normal validated path.
+    pub fn rename(&self, id: &InstanceId, new_name: impl Into<String>) -> Result<Instance> {
+        let mut instance = self.get(id)?;
+        instance.name = new_name.into();
+        self.update(&instance)?;
+        Ok(instance)
+    }
+
+    /// Duplicate METADATA into a fresh instance (spec §7). Game-directory
+    /// content copying is the caller's job (engine layer); this never touches
+    /// or overwrites the original — the copy gets a brand-new id.
+    pub fn duplicate(&self, id: &InstanceId, new_name: Option<String>) -> Result<Instance> {
+        let source = self.get(id)?;
+        let mut copy = Instance::new(
+            self.next_id(),
+            new_name.unwrap_or_else(|| format!("{} (copy)", source.name)),
+            MinecraftVersionId::new(source.minecraft_version.as_str().to_owned()),
+        )?;
+        copy.loader = source.loader.clone();
+        copy.settings = source.settings.clone();
+        copy.validate()?;
+        self.write(&copy)?;
+        Ok(copy)
+    }
+
+    /// Safe delete (spec §6): move the instance file into `<root>/.trash/`
+    /// instead of destroying it. The game directory is NOT touched here; the
+    /// caller offers a separate confirmed purge. Returns the trash path.
+    pub fn trash_delete(&self, id: &InstanceId) -> Result<PathBuf> {
+        let from = self.path_for(id);
+        if !from.exists() {
+            return Err(Error::new(
+                ErrorCode::InstanceNotFound,
+                format!("no instance with id {id}"),
+            ));
+        }
+        let trash_dir = self.root.join(".trash");
+        fs::create_dir_all(&trash_dir).map_err(|e| {
+            Error::with_source(
+                ErrorCode::IoFailure,
+                format!("cannot create {}", trash_dir.display()),
+                e,
+            )
+        })?;
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // Timestamp suffix keeps repeated trashes of same-named ids distinct;
+        // list() ignores .trash because entries lack the .json extension check
+        // only after rename — so give trashed files a non-json extension.
+        let to = trash_dir.join(format!("{}.json.trashed-{stamp}", id.as_str()));
+        fs::rename(&from, &to).map_err(|e| {
+            Error::with_source(
+                ErrorCode::IoFailure,
+                format!("cannot move {} to trash", from.display()),
+                e,
+            )
+        })?;
+        Ok(to)
     }
 
     /// Delete an instance file. Returns whether anything was deleted (false =
@@ -243,6 +307,13 @@ impl InstanceStore {
         })?;
         Ok(())
     }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -352,5 +423,55 @@ mod tests {
             listing.unreadable_files, 1,
             "corrupt file counted, others unaffected"
         );
+    }
+
+    #[test]
+    fn duplicate_copies_settings_never_the_id() {
+        let store = InstanceStore::new(unique_temp_dir("inst-dup"));
+        let mut src = store.create("PvP", "1.8.9", None).unwrap();
+        src.settings.memory_mb = Some(4096);
+        src.settings.jvm_args = vec!["-XX:+UseG1GC".into()];
+        store.update(&src).unwrap();
+
+        let copy = store.duplicate(&src.id, None).unwrap();
+        assert_ne!(copy.id, src.id);
+        assert!(copy.name.starts_with("PvP (copy)"));
+        assert_eq!(copy.settings, src.settings);
+
+        // Original untouched.
+        assert_eq!(store.get(&src.id).unwrap().name, "PvP");
+        assert_eq!(store.list().instances.len(), 2);
+    }
+
+    #[test]
+    fn trash_delete_preserves_the_file_outside_listing() {
+        let dir = unique_temp_dir("inst-trash");
+        let store = InstanceStore::new(&dir);
+        let inst = store.create("Careful", "1.20.1", None).unwrap();
+
+        let trash_path = store.trash_delete(&inst.id).unwrap();
+        assert!(trash_path.exists());
+        assert_eq!(store.list().instances.len(), 0, "trashed file not listed");
+        // And the original id is gone from the live namespace.
+        assert_eq!(store.get(&inst.id).unwrap_err().code(), ErrorCode::InstanceNotFound);
+    }
+
+    #[test]
+    fn launch_settings_roundtrip_and_validation() {
+        let store = InstanceStore::new(unique_temp_dir("inst-settings"));
+        let mut inst = store.create("Settings", "1.21.x", None).unwrap();
+        inst.settings.min_memory_mb = Some(1024);
+        inst.settings.memory_mb = Some(8192);
+        inst.settings.fullscreen = true;
+        inst.settings.env.insert("IKK_TEST".into(), "1".into());
+        store.update(&inst).unwrap();
+        let back = store.get(&inst.id).unwrap();
+        assert_eq!(back.settings.memory_mb, Some(8192));
+        assert!(back.updated_at_unix >= inst.created_at_unix);
+
+        // Impossible memory is rejected at the validation boundary.
+        let mut bad = store.get(&inst.id).unwrap();
+        bad.settings.memory_mb = Some(1); // below MIN_MEMORY_MB
+        assert_eq!(store.update(&bad).unwrap_err().code(), ErrorCode::InstanceInvalid);
     }
 }

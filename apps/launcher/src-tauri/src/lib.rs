@@ -41,6 +41,11 @@ struct AppData {
     /// Progress of the current install, polled by the UI.
     progress: InstallProgress,
     running: Option<ManagedProcess>,
+    /// Backend task tracking (Phase 8 §69–§70): installs report progress here;
+    /// the UI polls instead of being event-flooded.
+    tasks: ikk_core::tasks::TaskManager,
+    /// Memoized directory-size accounting (§61).
+    storage: std::sync::Mutex<ikk_minecraft::storage::StorageAccountant>,
     agent: ureq::Agent,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
@@ -148,6 +153,304 @@ fn delete_instance(data: State<'_, Mutex<AppData>>, id: String) -> Result<bool, 
     let deleted = app.instance_store.delete(&InstanceId::new(id))?;
     info!(%deleted, "instance delete requested");
     Ok(deleted)
+}
+
+// ---------------------------------------------------------------------------
+// Instance engine commands (Phase 8 §6–§7, §40–§43, §61, §69–§70)
+// ---------------------------------------------------------------------------
+
+/// Duplicate an instance's metadata into a fresh id (game-directory copying
+/// is a confirmed UI action; this never overwrites the original).
+#[tauri::command]
+fn duplicate_instance(
+    data: State<'_, Mutex<AppData>>,
+    id: String,
+    new_name: Option<String>,
+) -> Result<Instance, CommandError> {
+    let app = lock(&data)?;
+    let copy = app
+        .instance_store
+        .duplicate(&InstanceId::new(id), new_name)?;
+    info!(from = %id, to = %copy.id, "instance duplicated");
+    Ok(copy)
+}
+
+/// Metadata-only rename through the validated update path.
+#[tauri::command]
+fn rename_instance(
+    data: State<'_, Mutex<AppData>>,
+    id: String,
+    name: String,
+) -> Result<Instance, CommandError> {
+    let app = lock(&data)?;
+    let renamed = app.instance_store.rename(&InstanceId::new(id), name)?;
+    Ok(renamed)
+}
+
+/// Safe delete: instance file moves to trash; game data is untouched until a
+/// separate, explicitly-confirmed purge (spec §6).
+#[tauri::command]
+fn trash_delete_instance(data: State<'_, Mutex<AppData>>, id: String) -> Result<String, CommandError> {
+    let app = lock(&data)?;
+    let path = app.instance_store.trash_delete(&InstanceId::new(id))?;
+    warn!(%id, trash = %path.display(), "instance moved to trash");
+    Ok(path.display().to_string())
+}
+
+/// Structured pre-flight validation (§42). Uses the install plan as the
+/// source of truth for what SHOULD be on disk.
+#[tauri::command]
+fn validate_instance(
+    data: State<'_, Mutex<AppData>>,
+    id: String,
+) -> Result<ikk_api_types::ValidationReportDto, CommandError> {
+    let (data_dir, agent) = {
+        let app = lock(&data)?;
+        (app.data_dir.clone(), app.agent.clone())
+    };
+    let instance = find_instance(&lock(&data)?, &id)?;
+    let cache_root = data_dir.join("cache");
+    let resolved = resolve_effective_metadata(&agent, &cache_root, &instance)?;
+    let plan_files = ikk_minecraft::resolve::plan_install(&resolved.effective_metadata, &cache_root)?;
+
+    let expected: Vec<ikk_minecraft::validate::ExpectedArtifact> = plan_files
+        .artifacts
+        .iter()
+        .map(|a| ikk_minecraft::validate::ExpectedArtifact {
+            dest: a.dest.clone(),
+            url: a.url.clone(),
+            sha1: a.sha1.clone(),
+        })
+        .collect();
+
+    // Java: report against the best candidate even if unsuitable, so the
+    // finding names a concrete path rather than nothing.
+    let java_path = java::discover()
+        .first()
+        .map(|j| j.executable.clone())
+        .unwrap_or_else(|| PathBuf::from("java"));
+
+    let game_dir = game_dir_of(&data_dir, &id);
+    let report = ikk_minecraft::validate::InstanceValidator::validate(
+        &game_dir,
+        &expected,
+        &java_path,
+    )?;
+
+    Ok(ikk_api_types::ValidationReportDto {
+        ok: report.is_ok(),
+        findings: report
+            .findings
+            .into_iter()
+            .map(|f| ikk_api_types::FindingDto {
+                severity: match f.severity {
+                    ikk_minecraft::validate::Severity::Warning => "warning".to_owned(),
+                    ikk_minecraft::validate::Severity::Error => "error".to_owned(),
+                },
+                code: f.code.to_owned(),
+                path: f.path.map(|p| p.display().to_string()),
+                message: f.message,
+            })
+            .collect(),
+        repairs: report
+            .repairs
+            .into_iter()
+            .map(|r| match r {
+                ikk_minecraft::validate::RepairAction::Redownload { url, dest, sha1 } => {
+                    ikk_api_types::RepairActionDto {
+                        kind: "redownload".to_owned(),
+                        url: Some(url),
+                        dest: dest.display().to_string(),
+                        sha1,
+                    }
+                }
+                ikk_minecraft::validate::RepairAction::CreateDirectory(path) => {
+                    ikk_api_types::RepairActionDto {
+                        kind: "create-directory".to_owned(),
+                        url: None,
+                        dest: path.display().to_string(),
+                        sha1: None,
+                    }
+                }
+            })
+            .collect(),
+    })
+}
+
+/// Execute the repair actions proposed by `validate_instance` (§43): verified
+/// re-downloads only — nothing is ever deleted here.
+#[tauri::command]
+fn repair_instance(
+    data: State<'_, Mutex<AppData>>,
+    id: String,
+) -> Result<u32, CommandError> {
+    let report = validate_instance(&data, id.clone())?;
+    if report.ok {
+        return Ok(0);
+    }
+    let agent = lock(&data)?.agent.clone();
+    let cancel = lock(&data)?.cancel_flag();
+    let actions: Vec<ikk_minecraft::validate::RepairAction> = report
+        .repairs
+        .iter()
+        .filter_map(|r| match r.kind.as_str() {
+            "redownload" => Some(ikk_minecraft::validate::RepairAction::Redownload {
+                url: r.url.clone()?,
+                dest: PathBuf::from(&r.dest),
+                sha1: r.sha1.clone(),
+            }),
+            "create-directory" => Some(ikk_minecraft::validate::RepairAction::CreateDirectory(
+                PathBuf::from(&r.dest),
+            )),
+            _ => None,
+        })
+        .collect();
+    let done = ikk_minecraft::validate::apply_repairs(&agent, &actions, &cancel)?;
+    info!(id = %id, repaired = done, "instance repair finished");
+    Ok(done as u32)
+}
+
+/// Dry-run launch preparation (§40–§41): full resolution, zero spawning,
+/// argv returned ONLY in redacted form.
+#[tauri::command]
+fn dry_run_launch(
+    data: State<'_, Mutex<AppData>>,
+    id: String,
+    username: String,
+) -> Result<ikk_api_types::DryRunLaunchDto, CommandError> {
+    let (data_dir, agent) = {
+        let app = lock(&data)?;
+        (app.data_dir.clone(), app.agent.clone())
+    };
+    let instance = find_instance(&lock(&data)?, &id)?;
+    let cache_root = data_dir.join("cache");
+
+    let profile_path = cache_root.join("profiles").join(format!("{id}.json"));
+    let meta: VersionMetadata = serde_json::from_slice(
+        &std::fs::read(&profile_path).map_err(|_| {
+            CommandError::runtime_unavailable(
+                "This instance is not installed yet — dry-run needs installed metadata.",
+            )
+        })?,
+    )
+    .map_err(ser_err)?;
+
+    let required_major = meta.required_java_major();
+    let found = java::discover();
+    let runtime = java::select(&found, required_major).map_err(CommandError::from)?;
+
+    let plan_files = ikk_minecraft::resolve::plan_install(&meta, &cache_root)?;
+    let classpath: Vec<PathBuf> = std::iter::once(
+        cache_root
+            .join("versions")
+            .join(meta.id.clone())
+            .join(format!("{}.jar", meta.id)),
+    )
+    .chain(
+        plan_files
+            .artifacts
+            .iter()
+            .filter(|a| a.kind == ArtifactKind::Library)
+            .map(|a| a.dest.clone()),
+    )
+    .collect();
+
+    let game_dir = game_dir_of(&data_dir, &id);
+    let identity = ikk_minecraft::account::LaunchIdentity::offline(username)
+        .map_err(CommandError::from)?;
+    let options = LaunchOptions {
+        game_dir: game_dir.clone(),
+        assets_dir: cache_root.join("assets"),
+        natives_dir: natives_dir_of(&game_dir),
+        classpath,
+        logging_config: None,
+        memory_mb: instance.settings.memory_mb,
+        jvm_extra: instance.settings.jvm_args.clone(),
+    };
+    let plan = build_plan(&meta, &identity, runtime, &options).map_err(CommandError::from)?;
+
+    let secrets = vec![identity.access_token.clone()];
+    let argv = plan.argv_redacted(&secrets);
+    Ok(ikk_api_types::DryRunLaunchDto {
+        java_executable: plan.java_executable.display().to_string(),
+        main_class: plan.main_class.clone(),
+        jvm_args: plan.jvm_args.clone(),
+        game_args: plan.game_args.clone(),
+        argv_redacted: argv,
+        game_dir: game_dir.display().to_string(),
+        assets_dir: cache_root.join("assets").display().to_string(),
+    })
+}
+
+/// Storage accounting across instances and cache roots (§61); memoized in the
+/// backend so repeated opens are cheap.
+#[tauri::command]
+fn storage_usage(data: State<'_, Mutex<AppData>>) -> Result<ikk_api_types::StorageReportDto, CommandError> {
+    let app = lock(&data)?;
+    let mut accountant = app
+        .storage
+        .lock()
+        .map_err(|_| CommandError::internal("storage accountant poisoned"))?;
+
+    let mut report = ikk_api_types::StorageReportDto::default();
+    for instance in app.instance_store.list().instances {
+        let dir = game_dir_of(&app.data_dir, instance.id.as_str());
+        let bytes = accountant.size_of_dir(&dir).unwrap_or(0);
+        report.total_bytes += bytes;
+        report.instances.push(ikk_api_types::DirSizeDto {
+            label: instance.name,
+            path: dir.display().to_string(),
+            bytes,
+        });
+    }
+    for (label, sub) in [
+        ("versions", "versions"),
+        ("libraries", "libraries"),
+        ("assets", "assets"),
+        ("loader metadata", "loader-meta"),
+    ] {
+        let dir = app.data_dir.join("cache").join(sub);
+        if dir.exists() {
+            let bytes = accountant.size_of_dir(&dir).unwrap_or(0);
+            report.total_bytes += bytes;
+            report.cache.push(ikk_api_types::DirSizeDto {
+                label: label.to_owned(),
+                path: dir.display().to_string(),
+                bytes,
+            });
+        }
+    }
+    Ok(report)
+}
+
+/// Poll backend task snapshots (§69–§70). The event bridge can subscribe the
+/// frontend later; polling this keeps today's contract simple and typed.
+#[tauri::command]
+fn task_status(data: State<'_, Mutex<AppData>>) -> Result<Vec<ikk_api_types::TaskSnapshotDto>, CommandError> {
+    let app = lock(&data)?;
+    Ok(app
+        .tasks
+        .snapshot(None)
+        .into_iter()
+        .map(|s| ikk_api_types::TaskSnapshotDto {
+            id: s.id,
+            label: s.label,
+            state: match s.state {
+                ikk_core::tasks::TaskState::Queued => "queued",
+                ikk_core::tasks::TaskState::Running => "running",
+                ikk_core::tasks::TaskState::Completed => "completed",
+                ikk_core::tasks::TaskState::Failed => "failed",
+                ikk_core::tasks::TaskState::Cancelled => "cancelled",
+            }
+            .to_owned(),
+            current: s.current,
+            total: s.total,
+            percent: s.percent(),
+            message: s.message,
+            error_code: s.error_code,
+            error_message: s.error_message,
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +614,7 @@ fn install_instance(
     let mut plan = plan_install(&resolved.effective_metadata, &cache_root)?;
 
     let mut report = ikk_api_types::InstallReportDto::default();
-    run_plan(&data, &plan.artifacts, &mut report)?;
+    run_plan(&data, &format!("install-{id}"), &plan.artifacts, &mut report)?;
 
     // Stage 2: asset index → asset objects.
     transition(&data, LaunchPhase::Verifying)?;
@@ -325,7 +628,7 @@ fn install_instance(
         let index = ikk_minecraft::assets::AssetIndex::parse(&raw)?;
         let assets = plan_assets(&index, &cache_root);
         report.total_files += assets.len() as u32;
-        run_plan(&data, &assets, &mut report)?;
+        run_plan(&data, &format!("assets-{id}"), &assets, &mut report)?;
     }
 
     // Natives extraction (per-instance, zip-slip guarded inside the engine).
@@ -391,6 +694,7 @@ fn resolve_effective_metadata(
 
 fn run_plan(
     data: &State<'_, Mutex<AppData>>,
+    task_id: &str,
     artifacts: &[ikk_minecraft::resolve::PlannedArtifact],
     report: &mut ikk_api_types::InstallReportDto,
 ) -> Result<(), CommandError> {
@@ -408,7 +712,12 @@ fn run_plan(
         app.progress.total_files += artifacts.len() as u32;
     }
 
-    for artifact in artifacts {
+    let handle = {
+        let app = lock(data)?;
+        app.tasks.start(task_id, "Installing", artifacts.len() as u64, app.cancel_flag())
+    };
+
+    for (index, artifact) in artifacts.iter().enumerate() {
         {
             let mut app = lock(data)?;
             app.progress.current_label = artifact.label.clone();
@@ -429,8 +738,16 @@ fn run_plan(
             Err(e) => {
                 error!(artifact = %artifact.label, error = %e, "download failed");
                 report.failed.push(format!("{}: {}", artifact.label, e));
+                handle.fail("download.failed", &format!("{}: {}", artifact.label, e));
             }
         }
+        handle.progress(
+            index as u64 + 1,
+            format!("{} ({}/{})", artifact.label, index + 1, artifacts.len()),
+        );
+    }
+    if report.failed.is_empty() {
+        handle.complete("install complete");
     }
     Ok(())
 }
@@ -1273,6 +1590,8 @@ pub fn run() {
             phase: PhaseTracker::new(),
             progress: InstallProgress::default(),
             running: None,
+            tasks: ikk_core::tasks::TaskManager::new(),
+            storage: std::sync::Mutex::new(ikk_minecraft::storage::StorageAccountant::new()),
             agent,
             cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }))
@@ -1302,7 +1621,15 @@ pub fn run() {
             mods_updates,
             mods_list_profiles,
             mods_create_profile,
-            mods_switch_profile
+            mods_switch_profile,
+            duplicate_instance,
+            rename_instance,
+            trash_delete_instance,
+            validate_instance,
+            repair_instance,
+            dry_run_launch,
+            storage_usage,
+            task_status
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

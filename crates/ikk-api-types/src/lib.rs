@@ -170,6 +170,82 @@ pub struct ModUpdateDto {
     pub state: String,
 }
 
+// ---------------------------------------------------------------------------
+// Instance engine DTOs (Phase 8): validation, repair, dry-run, storage, tasks.
+// ---------------------------------------------------------------------------
+
+/// One structured validation finding (spec §42).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FindingDto {
+    /// "warning" | "error"
+    pub severity: String,
+    /// Stable category string (`instance.corrupt`, `java.not_found`, …).
+    pub code: String,
+    pub path: Option<String>,
+    pub message: String,
+}
+
+/// One proposed fix from validation — shown before anything runs (§43).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepairActionDto {
+    /// "redownload" | "create-directory"
+    pub kind: String,
+    pub url: Option<String>,
+    pub dest: String,
+    pub sha1: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ValidationReportDto {
+    pub ok: bool,
+    pub findings: Vec<FindingDto>,
+    pub repairs: Vec<RepairActionDto>,
+}
+
+/// Dry-run launch preview (§40–§41): everything resolved, nothing spawned,
+/// argv fully redacted. This is what the developer console shows.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DryRunLaunchDto {
+    pub java_executable: String,
+    pub main_class: String,
+    pub jvm_args: Vec<String>,
+    pub game_args: Vec<String>,
+    /// The exact would-be command line, secrets replaced by `[redacted]`.
+    pub argv_redacted: Vec<String>,
+    pub game_dir: String,
+    pub assets_dir: String,
+}
+
+/// Size of one accounted directory tree in bytes (§61), memoized backend-side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirSizeDto {
+    pub label: String,
+    pub path: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StorageReportDto {
+    pub instances: Vec<DirSizeDto>,
+    pub cache: Vec<DirSizeDto>,
+    pub total_bytes: u64,
+}
+
+/// Backend task snapshot (§69–§70) — the event bridge's payload shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskSnapshotDto {
+    pub id: String,
+    pub label: String,
+    /// "queued" | "running" | "completed" | "failed" | "cancelled"
+    pub state: String,
+    pub current: u64,
+    pub total: u64,
+    pub percent: u8,
+    pub message: String,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+}
+
 /// Serializable projection of [`ikk_core::Error`] for command failures.
 /// `code` is the stable taxonomy string (`instance.invalid`, …) so the UI can
 /// branch on category without parsing messages.
@@ -293,6 +369,54 @@ mod tests {
         let json = serde_json::to_string(&AppConfig::default()).expect("total");
         let back: AppConfig = serde_json::from_str(&json).expect("we just produced this shape");
         assert_eq!(back, AppConfig::default());
+    }
+
+    #[test]
+    fn phase8_dto_shapes_roundtrip() {
+        let report = ValidationReportDto {
+            ok: false,
+            findings: vec![FindingDto {
+                severity: "error".into(),
+                code: "java.not_found".into(),
+                path: Some("/usr/bin/java".into()),
+                message: "missing".into(),
+            }],
+            repairs: vec![RepairActionDto {
+                kind: "redownload".into(),
+                url: Some("https://example/a.jar".into()),
+                dest: "/cache/a.jar".into(),
+                sha1: None,
+            }],
+        };
+        let json = serde_json::to_string(&report).expect("total");
+        assert!(json.contains("java.not_found"));
+        assert!(json.contains("redownload"));
+
+        let dry = DryRunLaunchDto {
+            java_executable: "java".into(),
+            main_class: "net.minecraft.client.main.Main".into(),
+            jvm_args: vec!["-Xmx2048M".into()],
+            game_args: vec!["--accessToken".into(), "[redacted]".into()],
+            argv_redacted: vec!["java".into(), "--accessToken".into(), "[redacted]".into()],
+            game_dir: "/inst/game".into(),
+            assets_dir: "/data/assets".into(),
+        };
+        let json = serde_json::to_string(&dry).expect("total");
+        assert!(!json.contains("s3cret"), "no secrets in the DTO itself");
+
+        let task = TaskSnapshotDto {
+            id: "install-1".into(),
+            label: "Install".into(),
+            state: "running".into(),
+            current: 23,
+            total: 148,
+            percent: 15,
+            message: "Downloading libraries 23 / 148".into(),
+            error_code: None,
+            error_message: None,
+        };
+        let json = serde_json::to_string(&task).expect("total");
+        assert!(json.contains("\"percent\":15"));
     }
 
     #[test]
