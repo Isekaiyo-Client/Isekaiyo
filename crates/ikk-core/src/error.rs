@@ -27,6 +27,13 @@ pub enum ErrorCode {
     DiskFull,
     /// Permission denied writing an artifact.
     PermissionDenied,
+    /// The platform secure store (Keychain/Credential Manager/secret-service)
+    /// could not be used — the UI must communicate this, never fall back to
+    /// plaintext (Phase 9 §11).
+    CredentialsUnavailable,
+    /// Authentication failed for a reason other than expiry (device flow
+    /// denied, entitlement missing, malformed provider response).
+    AuthFailed,
 }
 
 impl ErrorCode {
@@ -47,6 +54,8 @@ impl ErrorCode {
             ErrorCode::Cancelled => "operation.cancelled",
             ErrorCode::DiskFull => "io.disk_full",
             ErrorCode::PermissionDenied => "io.permission_denied",
+            ErrorCode::CredentialsUnavailable => "credentials.unavailable",
+            ErrorCode::AuthFailed => "auth.failed",
         }
     }
 }

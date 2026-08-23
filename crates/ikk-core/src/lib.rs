@@ -5,7 +5,9 @@
 //! configuration store, and the Milestone-001 instance domain + persistence.
 //! Anything more belongs elsewhere.
 
+pub mod accounts;
 pub mod config;
+pub mod credentials;
 pub mod error;
 pub mod ids;
 pub mod instance;
@@ -18,6 +20,8 @@ pub mod version;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+pub use accounts::{offline_uuid, Account, AccountKind, AccountStatus, AccountStore, AccountsFile};
+pub use credentials::CredentialStore;
 pub use error::{Error, ErrorCode, Result};
 pub use ids::{InstanceId, MinecraftVersionId};
 pub use instance::{Instance, LoaderKind, LoaderSpec};

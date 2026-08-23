@@ -313,6 +313,55 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: 
 .badge-forge, .badge-neoforge { color: #ffa25c; border-color: rgba(255, 162, 92, 0.35); }
 .badge-vanilla { color: var(--ikk-text); }
 
+/* -- accounts (Phase 9) ---------------------------------------------------- */
+
+.account-active {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-color: var(--ikk-accent);
+}
+
+.account-list { display: flex; flex-direction: column; gap: 10px; margin: 14px 0; }
+
+.account-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+}
+.account-row.active { border-color: var(--ikk-accent); }
+
+.account-avatar {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 16px;
+  color: #fff;
+  user-select: none;
+}
+
+.account-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.account-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-meta { font-size: 12px; }
+
+.account-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+
+.device-code {
+  font-family: var(--ikk-mono, ui-monospace, monospace);
+  font-size: 26px;
+  letter-spacing: 0.35em;
+  text-align: center;
+  padding: 14px 0;
+  color: var(--ikk-accent);
+  user-select: all;
+}
+
 /* ---- dialogs & forms ---- */
 
 .dialog-backdrop {

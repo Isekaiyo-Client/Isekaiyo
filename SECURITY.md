@@ -14,6 +14,8 @@ In scope: the launcher, its update/auth/download mechanisms, plugin host, market
 ## Rules baked into the project
 
 - Secrets never enter the repository (see [security docs](docs/security.md)); CI secrets live in GitHub settings only.
+- Authentication tokens live ONLY in the OS secure store (Credential Manager / Keychain / secret-service) — never in plaintext files, logs, frontend state, or launch-argument debug views. See [authentication security](docs/security/authentication.md).
+- Microsoft sign-in uses the official OAuth device flow; the launcher never collects passwords and never fakes entitlements.
 - All downloads checksum-verified; update artifacts signature-verified (ADR-0007).
 - Dependency audits (`cargo audit`/`deny`) run nightly; lockfiles are committed.
 

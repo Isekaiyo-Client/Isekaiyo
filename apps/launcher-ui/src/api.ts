@@ -129,12 +129,6 @@ export function deleteInstance(id: string): Promise<boolean> {
   return invoke<boolean>("delete_instance", { id });
 }
 
-/** Ask the core to launch an instance with an offline-profile identity.
- *  Resolves with the game PID once the process starts. */
-export function launchInstance(id: string, username: string): Promise<number> {
-  return invoke<number>("launch_instance", { id, username });
-}
-
 // -- version & loader metadata (Phase 3/5) ------------------------------------
 
 export interface VersionEntryDto {
@@ -430,4 +424,85 @@ export interface TaskSnapshotDto {
 
 export function taskStatus(): Promise<TaskSnapshotDto[]> {
   return invoke<TaskSnapshotDto[]>("task_status");
+}
+
+// -- accounts (Phase 9) ---------------------------------------------------------
+// These DTOs carry PUBLIC metadata only — the backend model has no credential
+// fields, and no command exists that returns any token.
+
+export type AccountKind = "microsoft" | "offline";
+export type AccountStatus =
+  | "signed-out"
+  | "authenticated"
+  | "refreshing"
+  | "expired"
+  | "reauth-required"
+  | "error";
+
+export interface AccountDto {
+  id: string;
+  kind: AccountKind;
+  display_name: string;
+  username: string;
+  uuid: string;
+  avatar_url: string | null;
+  status: AccountStatus;
+  active: boolean;
+}
+
+export interface DeviceCodeDto {
+  /** Not a secret (OAuth device grant): used to poll account_microsoft_poll. */
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  interval_secs: number;
+}
+
+export function accountList(): Promise<AccountDto[]> {
+  return invoke<AccountDto[]>("account_list");
+}
+
+export function accountGetActive(): Promise<AccountDto | null> {
+  return invoke<AccountDto | null>("account_get_active");
+}
+
+/** Create an explicit Offline/Local profile (stable UUID from the username). */
+export function accountAddOffline(displayName: string, username: string): Promise<AccountDto> {
+  return invoke<AccountDto>("account_add_offline", { displayName, username });
+}
+
+/** Step 1 of Microsoft sign-in: get the REAL device code to show the user. */
+export function accountMicrosoftStart(): Promise<DeviceCodeDto> {
+  return invoke<DeviceCodeDto>("account_microsoft_start");
+}
+
+/** One poll of the device flow; retry at `interval_secs` while state is pending. */
+export function accountMicrosoftPoll(
+  deviceCode: string,
+): Promise<[state: string, account: AccountDto | null]> {
+  return invoke<[string, AccountDto | null]>("account_microsoft_poll", { deviceCode });
+}
+
+export function accountSelect(id: string): Promise<void> {
+  return invoke<void>("account_select", { id });
+}
+
+/** Remove account: credentials deleted first, then metadata. */
+export function accountRemove(id: string): Promise<void> {
+  return invoke<void>("account_remove", { id });
+}
+
+/** Sign out: credentials removed, harmless metadata kept. */
+export function accountLogout(id: string): Promise<void> {
+  return invoke<void>("account_logout", { id });
+}
+
+/** One bounded silent-refresh attempt; errors mean reauthentication. */
+export function accountRefresh(id: string): Promise<AccountDto> {
+  return invoke<AccountDto>("account_refresh", { id });
+}
+
+/** Launch now resolves the ACTIVE account backend-side — no username param. */
+export function launchInstance(id: string): Promise<number> {
+  return invoke<number>("launch_instance", { id });
 }

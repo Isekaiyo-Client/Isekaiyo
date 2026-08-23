@@ -46,8 +46,74 @@ struct AppData {
     tasks: ikk_core::tasks::TaskManager,
     /// Memoized directory-size accounting (§61).
     storage: std::sync::Mutex<ikk_minecraft::storage::StorageAccountant>,
+    // -- accounts (Phase 9) -------------------------------------------------
+    /// Public account metadata persistence.
+    account_store: ikk_core::AccountStore,
+    /// In-memory view of that metadata (saved through the store on change).
+    accounts: ikk_core::AccountsFile,
+    /// Secure token storage; tokens NEVER touch this struct's other fields.
+    credentials: std::sync::Arc<dyn ikk_core::CredentialStore>,
     agent: ureq::Agent,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Platform secure store via the `keyring` crate: Windows Credential Manager,
+/// macOS Keychain, Linux secret-service (see Cargo.toml license note).
+struct KeyringCredentialStore;
+
+impl KeyringCredentialStore {
+    fn entry(&self, key: &str) -> ikk_core::Result<keyring::Entry> {
+        keyring::Entry::new("isekaiyo", key)
+            .map_err(|e| ikk_core::credentials::unavailable(&e.to_string()))
+    }
+}
+
+impl ikk_core::CredentialStore for KeyringCredentialStore {
+    fn store(&self, key: &str, secret: &str) -> ikk_core::Result<()> {
+        self.entry(key)?
+            .set_password(secret)
+            .map_err(|e| ikk_core::credentials::unavailable(&e.to_string()))
+    }
+
+    fn retrieve(&self, key: &str) -> ikk_core::Result<Option<String>> {
+        match self.entry(key)?.get_password() {
+            Ok(secret) => Ok(Some(secret)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(ikk_core::credentials::unavailable(&e.to_string())),
+        }
+    }
+
+    fn delete(&self, key: &str) -> ikk_core::Result<()> {
+        match self.entry(key)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(ikk_core::credentials::unavailable(&e.to_string())),
+        }
+    }
+}
+
+// -- credential key layout (namespaced by account id; values are JSON blobs) --
+
+fn msa_tokens_key(account_id: &str) -> String {
+    format!("msa/{account_id}/tokens")
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedMcIdentity {
+    username: String,
+    uuid: String,
+    mc_access_token: String,
+    expires_at_unix: u64,
+}
+
+fn mc_identity_key(account_id: &str) -> String {
+    format!("msa/{account_id}/mc")
+}
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 impl AppData {
@@ -454,6 +520,296 @@ fn task_status(data: State<'_, Mutex<AppData>>) -> Result<Vec<ikk_api_types::Tas
 }
 
 // ---------------------------------------------------------------------------
+// Account commands (Phase 9 §27). The frontend receives PUBLIC metadata only;
+// there is deliberately no command that returns any token.
+// ---------------------------------------------------------------------------
+
+fn account_to_dto(app: &AppData, account: &ikk_core::Account) -> ikk_api_types::AccountDto {
+    ikk_api_types::AccountDto {
+        id: account.id.clone(),
+        kind: account.kind.as_str().to_owned(),
+        display_name: account.display_name.clone(),
+        username: account.username.clone(),
+        uuid: account.uuid.clone(),
+        avatar_url: account.avatar_url.clone(),
+        status: account.status.as_str().to_owned(),
+        active: app.accounts.active_account_id.as_deref() == Some(account.id.as_str()),
+    }
+}
+
+#[tauri::command]
+fn account_list(data: State<'_, Mutex<AppData>>) -> Result<Vec<ikk_api_types::AccountDto>, CommandError> {
+    let app = lock(&data)?;
+    Ok(app.accounts.accounts.iter().map(|a| account_to_dto(&app, a)).collect())
+}
+
+#[tauri::command]
+fn account_get_active(
+    data: State<'_, Mutex<AppData>>,
+) -> Result<Option<ikk_api_types::AccountDto>, CommandError> {
+    let app = lock(&data)?;
+    let id = app.accounts.active_account_id.as_deref();
+    Ok(app
+        .accounts
+        .accounts
+        .iter()
+        .find(|a| Some(a.id.as_str()) == id)
+        .map(|a| account_to_dto(&app, a)))
+}
+
+/// Add an explicit Offline/Local profile. Stable UUID derived from the name;
+/// clearly typed, never presented as authenticated (spec §17–§18).
+#[tauri::command]
+fn account_add_offline(
+    data: State<'_, Mutex<AppData>>,
+    display_name: String,
+    username: String,
+) -> Result<ikk_api_types::AccountDto, CommandError> {
+    let mut app = lock(&data)?;
+    let account = app.account_store.add_offline(&mut app.accounts, display_name, username)?;
+    info!(id = %account.id, "offline profile added");
+    Ok(account_to_dto(&app, &account))
+}
+
+/// Step 1 of Microsoft sign-in: obtain the REAL device code from Microsoft.
+/// The UI shows the user code + verification URI; we never render a login form.
+#[tauri::command]
+fn account_microsoft_start(
+    data: State<'_, Mutex<AppData>>,
+) -> Result<ikk_api_types::DeviceCodeDto, CommandError> {
+    let agent = lock(&data)?.agent.clone();
+    let start = ikk_minecraft::msauth::start_device_flow(&agent)?;
+    info!("microsoft device flow started");
+    Ok(ikk_api_types::DeviceCodeDto {
+        device_code: start.device_code,
+        user_code: start.user_code,
+        verification_uri: start.verification_uri,
+        interval_secs: start.interval,
+    })
+}
+
+/// One poll of step 2 (the frontend retries at `interval_secs`). Returns the
+/// state plus the completed account when the user finished in their browser.
+#[tauri::command]
+fn account_microsoft_poll(
+    data: State<'_, Mutex<AppData>>,
+    device_code: String,
+) -> Result<(String, Option<ikk_api_types::AccountDto>), CommandError> {
+    let (agent, credentials) = {
+        let app = lock(&data)?;
+        (app.agent.clone(), std::sync::Arc::clone(&app.credentials))
+    };
+    let poll = ikk_minecraft::msauth::poll_device_flow(&agent, &device_code)?;
+    if poll.state != "ok" {
+        return Ok((poll.state, None));
+    }
+    let tokens = poll.tokens.expect("state ok implies tokens");
+
+    // Steps 3–6 run immediately after consent — full validation before we
+    // record ANYTHING (spec §7: no stage skipped, no fake success).
+    let profile = ikk_minecraft::msauth::complete_minecraft_chain(&agent, &tokens)
+        .map_err(|e| {
+            error!(error = %e, "minecraft auth chain failed");
+            e
+        })?;
+
+    // Credentials go to secure storage FIRST; only then is public metadata recorded.
+    let tokens_json = serde_json::json!({
+        "access_token": tokens.access_token,
+        "refresh_token": tokens.refresh_token,
+        "expires_at_unix": tokens.expires_at_unix,
+    });
+    credentials.store("msa/pending/tokens", &tokens_json.to_string())?;
+    let cached = CachedMcIdentity {
+        username: profile.username.clone(),
+        uuid: profile.uuid.clone(),
+        mc_access_token: profile.mc_access_token.clone(),
+        expires_at_unix: profile.expires_at_unix,
+    };
+    credentials.store("msa/pending/mc", &serde_json::to_string(&cached).map_err(ser_err)?)?;
+
+    let mut app = lock(&data)?;
+    // Move pending secrets under the real account id (two-step rename because
+    // the id is minted by add_microsoft below).
+    let account = app.account_store.add_microsoft(
+        &mut app.accounts,
+        profile.username.clone(),
+        profile.username,
+        profile.uuid.clone(),
+        None, // skin URL arrives with the profile milestone; fallback avatar in UI
+    )?;
+    for suffix in ["tokens", "mc"] {
+        if let Some(secret) = credentials.retrieve(&format!("msa/pending/{suffix}"))? {
+            credentials.store(&format!("msa/{}/{suffix}", account.id), &secret)?;
+            credentials.delete(&format!("msa/pending/{suffix}"))?;
+        }
+    }
+    info!(id = %account.id, "microsoft account added (entitlement verified)");
+    Ok(("ok", Some(account_to_dto(&app, &account))))
+}
+
+#[tauri::command]
+fn account_select(data: State<'_, Mutex<AppData>>, id: String) -> Result<(), CommandError> {
+    let mut app = lock(&data)?;
+    app.account_store.select(&mut app.accounts, Some(&id))?;
+    info!(%id, "active account selected");
+    Ok(())
+}
+
+#[tauri::command]
+fn account_remove(data: State<'_, Mutex<AppData>>, id: String) -> Result<(), CommandError> {
+    let mut app = lock(&data)?;
+    // Credentials first so an interrupted removal can never leave usable
+    // tokens behind without metadata pointing at them (spec §13/§37).
+    app.credentials.delete(&msa_tokens_key(&id))?;
+    app.credentials.delete(&mc_identity_key(&id))?;
+    app.account_store.remove(&mut app.accounts, &id)?;
+    warn!(%id, "account removed");
+    Ok(())
+}
+
+/// Sign out: remove credentials, mark SignedOut, keep harmless metadata (§13).
+#[tauri::command]
+fn account_logout(data: State<'_, Mutex<AppData>>, id: String) -> Result<(), CommandError> {
+    let mut app = lock(&data)?;
+    app.credentials.delete(&msa_tokens_key(&id))?;
+    app.credentials.delete(&mc_identity_key(&id))?;
+    app.account_store.set_status(&mut app.accounts, &id, ikk_core::AccountStatus::SignedOut)?;
+    info!(%id, "account signed out");
+    Ok(())
+}
+
+/// One bounded silent-refresh attempt (spec §12: never retry forever).
+#[tauri::command]
+fn account_refresh(data: State<'_, Mutex<AppData>>, id: String) -> Result<ikk_api_types::AccountDto, CommandError> {
+    let (agent, credentials) = {
+        let app = lock(&data)?;
+        (app.agent.clone(), std::sync::Arc::clone(&app.credentials))
+    };
+    let stored = credentials.retrieve(&msa_tokens_key(&id))?
+        .ok_or_else(|| CommandError::from(ikk_core::Error::new(
+            ikk_core::ErrorCode::AuthTokenExpired,
+            "no stored credentials — sign in again",
+        )))?;
+    let tokens: ikk_minecraft::msauth::MsTokens = serde_json::from_str(&stored)
+        .map_err(|_| CommandError::from(ikk_core::Error::new(
+            ikk_core::ErrorCode::ConfigInvalid,
+            "stored credentials were unreadable — sign in again",
+        )))?;
+
+    let refreshed = match ikk_minecraft::msauth::refresh_tokens(&agent, &tokens.refresh_token) {
+        Ok(t) => t,
+        Err(_) => {
+            let mut app = lock(&data)?;
+            app.account_store
+                .set_status(&mut app.accounts, &id, ikk_core::AccountStatus::ReauthRequired)?;
+            return Err(CommandError::from(ikk_core::Error::new(
+                ikk_core::ErrorCode::AuthTokenExpired,
+                "silent refresh rejected — reauthentication required",
+            )));
+        }
+    };
+
+    let profile = ikk_minecraft::msauth::complete_minecraft_chain(&agent, &refreshed)?;
+    let tokens_json = serde_json::json!({
+        "access_token": refreshed.access_token,
+        "refresh_token": refreshed.refresh_token,
+        "expires_at_unix": refreshed.expires_at_unix,
+    });
+    credentials.store(&msa_tokens_key(&id), &tokens_json.to_string())?;
+    let cached = CachedMcIdentity {
+        username: profile.username.clone(),
+        uuid: profile.uuid.clone(),
+        mc_access_token: profile.mc_access_token,
+        expires_at_unix: profile.expires_at_unix,
+    };
+    credentials.store(&mc_identity_key(&id), &serde_json::to_string(&cached).map_err(ser_err)?)?;
+
+    let mut app = lock(&data)?;
+    app.account_store
+        .set_status(&mut app.accounts, &id, ikk_core::AccountStatus::Authenticated)?;
+    let account = app
+        .accounts
+        .accounts
+        .iter()
+        .find(|a| a.id == id)
+        .cloned()
+        .ok_or_else(|| CommandError.internal("account vanished during refresh"))?;
+    Ok(account_to_dto(&app, &account))
+}
+
+/// Resolve the ACTIVE account into the launch identity (Phase 9 §29–§31).
+/// This is the ONLY place tokens are read back out of secure storage, and it
+/// hands the planner a one-shot LaunchIdentity, nothing more.
+fn resolve_launch_identity(app: &AppData) -> Result<ikk_minecraft::account::LaunchIdentity, CommandError> {
+    use ikk_core::AccountKind as K;
+    let account = app
+        .accounts
+        .accounts
+        .iter()
+        .find(|a| Some(a.id.as_str()) == app.accounts.active_account_id.as_deref())
+        .ok_or_else(|| {
+            CommandError::from(ikk_core::Error::new(
+                ikk_core::ErrorCode::AuthFailed,
+                "No account selected — add a Microsoft account or create an offline profile first",
+            ))
+        })?;
+    match account.kind {
+        K::Offline => {
+            ikk_minecraft::account::LaunchIdentity::offline(account.username.clone())
+                .map_err(CommandError::from)
+        }
+        K::Microsoft => {
+            let cached_raw = app.credentials.retrieve(&mc_identity_key(&account.id))?;
+            let cached: Option<CachedMcIdentity> = cached_raw
+                .and_then(|raw| serde_json::from_str(&raw).ok());
+            if let Some(cached) = cached.filter(|c| c.expires_at_unix > now_unix() + 60) {
+                return ikk_minecraft::account::LaunchIdentity::microsoft(
+                    cached.username,
+                    cached.uuid,
+                    cached.mc_access_token,
+                )
+                .map_err(CommandError::from);
+            }
+            // Cached identity missing/expired → one silent refresh attempt.
+            let stored = app.credentials.retrieve(&msa_tokens_key(&account.id))?
+                .and_then(|raw| serde_json::from_str::<ikk_minecraft::msauth::MsTokens>(&raw).ok())
+                .ok_or_else(|| {
+                    CommandError::from(ikk_core::Error::new(
+                        ikk_core::ErrorCode::AuthTokenExpired,
+                        "credentials missing — this Microsoft account must sign in again",
+                    ))
+                })?;
+            let refreshed = ikk_minecraft::msauth::refresh_tokens(&app.agent, &stored.refresh_token)
+                .map_err(CommandError::from)?;
+            let profile =
+                ikk_minecraft::msauth::complete_minecraft_chain(&app.agent, &refreshed)
+                    .map_err(CommandError::from)?;
+            let tokens_json = serde_json::json!({
+                "access_token": refreshed.access_token,
+                "refresh_token": refreshed.refresh_token,
+                "expires_at_unix": refreshed.expires_at_unix,
+            });
+            app.credentials.store(&msa_tokens_key(&account.id), &tokens_json.to_string())?;
+            let cached = CachedMcIdentity {
+                username: profile.username.clone(),
+                uuid: profile.uuid.clone(),
+                mc_access_token: profile.mc_access_token.clone(),
+                expires_at_unix: profile.expires_at_unix,
+            };
+            app.credentials
+                .store(&mc_identity_key(&account.id), &serde_json::to_string(&cached).map_err(ser_err)?)?;
+            ikk_minecraft::account::LaunchIdentity::microsoft(
+                profile.username,
+                profile.uuid,
+                profile.mc_access_token,
+            )
+            .map_err(CommandError::from)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Version metadata service (Phase 3)
 // ---------------------------------------------------------------------------
 
@@ -784,7 +1140,6 @@ fn natives_dir_of(game_dir: &std::path::Path) -> PathBuf {
 fn launch_instance(
     data: State<'_, Mutex<AppData>>,
     id: String,
-    username: String,
 ) -> Result<u32, CommandError> {
     transition(&data, LaunchPhase::Preparing)?;
 
@@ -848,16 +1203,27 @@ fn launch_instance(
         .find(|a| a.kind == ArtifactKind::LoggingConfig)
         .map(|a| a.dest.clone());
 
-    let identity =
-        ikk_minecraft::account::LaunchIdentity::offline(username).map_err(CommandError::from)?;
+    // Phase 9: identity comes from the ACTIVE ACCOUNT, never from a raw
+    // parameter. Offline profiles stay honest (token "0"); Microsoft accounts
+    // resolve through secure storage + one bounded silent refresh.
+    let identity = {
+        let app = lock(&data)?;
+        resolve_launch_identity(&app)?
+    };
+    {
+        let mut app = lock(&data)?;
+        if let Some(active_id) = app.accounts.active_account_id.clone() {
+            let _ = app.account_store.touch(&mut app.accounts, &active_id);
+        }
+    }
     let options = LaunchOptions {
         game_dir: game_dir.clone(),
         assets_dir: cache_root.join("assets"),
         natives_dir: natives_dir_of(&game_dir),
         classpath,
         logging_config,
-        memory_mb: None, // profile-level memory arrives with profiles UI
-        jvm_extra: Vec::new(),
+        memory_mb: instance.settings.memory_mb,
+        jvm_extra: instance.settings.jvm_args.clone(),
     };
     let plan = build_plan(&meta, &identity, runtime, &options).map_err(CommandError::from)?;
 
@@ -1592,6 +1958,25 @@ pub fn run() {
             running: None,
             tasks: ikk_core::tasks::TaskManager::new(),
             storage: std::sync::Mutex::new(ikk_minecraft::storage::StorageAccountant::new()),
+            account_store: {
+                let path = data_dir.join("accounts.json");
+                let store = ikk_core::AccountStore::new(&path);
+                match std::fs::read_to_string(&path) {
+                    Ok(raw) if serde_json::from_str::<ikk_core::AccountsFile>(&raw).is_err() => warn!(
+                        "accounts file was malformed; it was preserved and an empty account list is in effect"
+                    ),
+                    _ => {}
+                }
+                store
+            },
+            accounts: {
+                let loaded = ikk_core::AccountStore::new(data_dir.join("accounts.json")).load();
+                if let Some(backup) = &loaded.corrupt_backup {
+                    warn!(backup = %backup.display(), "accounts file preserved as corrupt backup");
+                }
+                loaded.file
+            },
+            credentials: std::sync::Arc::new(KeyringCredentialStore),
             agent,
             cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }))
@@ -1629,7 +2014,16 @@ pub fn run() {
             repair_instance,
             dry_run_launch,
             storage_usage,
-            task_status
+            task_status,
+            account_list,
+            account_get_active,
+            account_add_offline,
+            account_microsoft_start,
+            account_microsoft_poll,
+            account_select,
+            account_remove,
+            account_logout,
+            account_refresh
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {
