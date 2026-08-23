@@ -7,9 +7,91 @@
 use crate::error::{Error, ErrorCode, Result};
 use crate::ids::{InstanceId, MinecraftVersionId};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_NAME_LEN: usize = 64;
+
+/// Per-instance launch preferences (Phase 8 §3). Typed — never an unstructured
+/// blob. Every field optional so older persisted instances deserialize with
+/// defaults (`#[serde(default)]` keeps v1 files readable).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct LaunchSettings {
+    /// Maximum heap in MiB. None = engine picks a sane default from RAM.
+    #[serde(default)]
+    pub memory_mb: Option<u32>,
+    /// Initial heap in MiB (clamped to ≤ memory_mb at validation).
+    #[serde(default)]
+    pub min_memory_mb: Option<u32>,
+    #[serde(default)]
+    pub window_width: Option<u32>,
+    #[serde(default)]
+    pub window_height: Option<u32>,
+    #[serde(default)]
+    pub fullscreen: bool,
+    /// User JVM arguments appended AFTER safe defaults (spec §51).
+    #[serde(default)]
+    pub jvm_args: Vec<String>,
+    /// Instance-specific game arguments (spec §52) — kept separate from JVM args.
+    #[serde(default)]
+    pub game_args: Vec<String>,
+    /// Local environment overrides. Local user config only; remote data may
+    /// NEVER populate this (spec §54).
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+/// Bounds used by validation: values outside these are rejected as impossible
+/// rather than clamped silently (spec §50).
+pub const MIN_MEMORY_MB: u32 = 512;
+pub const MAX_MEMORY_MB: u32 = 32_768;
+
+impl LaunchSettings {
+    fn validate(&self) -> Result<()> {
+        for m in [self.memory_mb, self.min_memory_mb] {
+            if let Some(mb) = m {
+                if !(MIN_MEMORY_MB..=MAX_MEMORY_MB).contains(&mb) {
+                    return Err(Error::new(
+                        ErrorCode::InstanceInvalid,
+                        format!("memory {mb} MiB outside {MIN_MEMORY_MB}–{MAX_MEMORY_MB}"),
+                    ));
+                }
+            }
+        }
+        if let (Some(min), Some(max)) = (self.min_memory_mb, self.memory_mb) {
+            if min > max {
+                return Err(Error::new(
+                    ErrorCode::InstanceInvalid,
+                    "initial memory exceeds maximum memory",
+                ));
+            }
+        }
+        validate_arg_list("jvm", &self.jvm_args)?;
+        validate_arg_list("game", &self.game_args)?;
+        Ok(())
+    }
+}
+
+fn validate_arg_list(kind: &str, args: &[String]) -> Result<()> {
+    const MAX_ARGS: usize = 256;
+    const MAX_ARG_LEN: usize = 4096;
+    if args.len() > MAX_ARGS {
+        return Err(Error::new(
+            ErrorCode::InstanceInvalid,
+            format!("{kind} argument list exceeds {MAX_ARGS} entries"),
+        ));
+    }
+    for a in args {
+        // Newlines/NULs would corrupt logs or spawn; reject, don't sanitize.
+        if a.contains(['\n', '\r', '\0']) || a.len() > MAX_ARG_LEN {
+            return Err(Error::new(
+                ErrorCode::InstanceInvalid,
+                format!("{kind} argument contains control characters or is oversized"),
+            ));
+        }
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -39,6 +121,11 @@ pub struct Instance {
     /// Unix seconds — u64 keeps JSON stable across platforms.
     pub created_at_unix: u64,
     pub last_played_unix: Option<u64>,
+    /// Bumped by the store on every successful update.
+    #[serde(default)]
+    pub updated_at_unix: u64,
+    #[serde(default)]
+    pub settings: LaunchSettings,
 }
 
 impl Instance {
@@ -55,6 +142,8 @@ impl Instance {
             loader: LoaderSpec::default(),
             created_at_unix: unix_now(),
             last_played_unix: None,
+            updated_at_unix: 0,
+            settings: LaunchSettings::default(),
         };
         instance.validate()?;
         Ok(instance)
@@ -103,7 +192,7 @@ impl Instance {
                 format!("loader {:?} requires a version", self.loader.kind),
             ));
         }
-        Ok(())
+        self.settings.validate()
     }
 }
 

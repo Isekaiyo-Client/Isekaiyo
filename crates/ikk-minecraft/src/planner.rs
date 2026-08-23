@@ -40,9 +40,9 @@ pub struct LaunchPlan {
 }
 
 impl LaunchPlan {
-    /// Flat argv for logging/debugging (never contains secrets other than the
+    /// Flat argv for logging/debugging. Never contains secrets other than the
     /// access token slot, which callers must not log — see process.rs which
-    /// writes only stdout/stderr of the game, not argv).
+    /// writes only stdout/stderr of the game, not argv.
     pub fn argv(&self) -> Vec<String> {
         let mut argv = vec![self.java_executable.to_string_lossy().into_owned()];
         argv.extend(self.jvm_args.iter().cloned());
@@ -50,6 +50,36 @@ impl LaunchPlan {
         argv.extend(self.game_args.iter().cloned());
         argv
     }
+
+    /// Dry-run / developer-inspection view (spec §40–§41): the exact argv that
+    /// WOULD run, with every supplied secret replaced by `[redacted]`. This is
+    /// the only argv form allowed to cross into logs or the UI.
+    pub fn argv_redacted(&self, secrets: &[String]) -> Vec<String> {
+        self.argv()
+            .into_iter()
+            .map(|arg| {
+                let mut out = arg;
+                for secret in secrets {
+                    if !secret.is_empty() {
+                        out = out.replace(secret.as_str(), "[redacted]");
+                    }
+                }
+                out
+            })
+            .collect()
+    }
+}
+
+/// Replace every occurrence of any secret in `text` with `[redacted]`
+/// (spec §59). Used for crash reports and debug output.
+pub fn redact_secrets(text: &str, secrets: &[String]) -> String {
+    let mut out = text.to_owned();
+    for secret in secrets {
+        if !secret.is_empty() {
+            out = out.replace(secret.as_str(), "[redacted]");
+        }
+    }
+    out
 }
 
 fn classpath_separator() -> &'static str {
@@ -322,6 +352,33 @@ mod tests {
         // Offline token is the honest placeholder, never fabricated auth.
         let token_at = plan.game_args.iter().position(|a| a == "0");
         assert!(token_at.is_some_and(|i| plan.game_args[i - 1] == "--accessToken"));
+    }
+
+    #[test]
+    fn dry_run_argv_redacts_every_secret_occurrence() {
+        let meta = fixture_meta();
+        let identity = LaunchIdentity::offline("Steve").unwrap();
+        let java = crate::java::JavaRuntime {
+            executable: PathBuf::from("/usr/bin/java"),
+            major_version: 17,
+            home: None,
+        };
+        let plan = build_plan(&meta, &identity, &java, &opts(false)).unwrap();
+
+        // Offline placeholder token is "0"; use a realistic-looking secret.
+        let secrets = vec!["s3cret-token-abc".to_owned(), "Steve".to_owned()];
+        let argv = plan.argv_redacted(&secrets);
+        assert!(!argv.iter().any(|a| a.contains("s3cret-token-abc")));
+        assert!(argv.iter().any(|a| a.contains("[redacted]")));
+        // The raw form still exists for the actual spawn (not the debug view).
+        assert!(plan.argv().iter().any(|a| a == "--username"));
+    }
+
+    #[test]
+    fn redact_secrets_is_total_and_noop_safe() {
+        assert_eq!(redact_secrets("token=xyz end", &["xyz".to_owned()]), "token=[redacted] end");
+        assert_eq!(redact_secrets("nothing here", &[]), "nothing here");
+        assert_eq!(redact_secrets("empty secret", &[String::new()]), "empty secret");
     }
 
     #[test]

@@ -44,6 +44,8 @@ export interface Instance {
   loader: LoaderSpec;
   created_at_unix: number;
   last_played_unix: number | null;
+  updated_at_unix: number;
+  settings: LaunchSettings;
 }
 
 export interface InstanceListing {
@@ -54,6 +56,19 @@ export interface InstanceListing {
 export interface LoaderInput {
   kind: LoaderKind;
   version: string | null;
+}
+
+/** Per-instance launch preferences (Phase 8 §3) — typed, optional fields so
+ *  older persisted instances deserialize with defaults. */
+export interface LaunchSettings {
+  memory_mb: number | null;
+  min_memory_mb: number | null;
+  window_width: number | null;
+  window_height: number | null;
+  fullscreen: boolean;
+  jvm_args: string[];
+  game_args: string[];
+  env: Record<string, string>;
 }
 
 /** Serializable projection of ikk-core::Error (stable `code` categories).
@@ -321,4 +336,98 @@ export function modsCreateProfile(instanceId: string, name: string): Promise<Mod
 
 export function modsSwitchProfile(instanceId: string, profileId: string | null): Promise<void> {
   return invoke<void>("mods_switch_profile", { instanceId, profileId });
+}
+
+// -- instance engine (Phase 8) -------------------------------------------------
+
+/** Duplicate an instance's metadata into a fresh id. */
+export function duplicateInstance(id: string, newName?: string): Promise<Instance> {
+  return invoke<Instance>("duplicate_instance", { id, newName: newName ?? null });
+}
+
+export function renameInstance(id: string, name: string): Promise<Instance> {
+  return invoke<Instance>("rename_instance", { id, name });
+}
+
+/** Safe delete — the file moves to trash; game data is untouched. */
+export function trashDeleteInstance(id: string): Promise<string> {
+  return invoke<string>("trash_delete_instance", { id });
+}
+
+export interface FindingDto {
+  severity: "warning" | "error";
+  code: string;
+  path: string | null;
+  message: string;
+}
+
+export interface RepairActionDto {
+  kind: "redownload" | "create-directory";
+  url: string | null;
+  dest: string;
+  sha1: string | null;
+}
+
+export interface ValidationReportDto {
+  ok: boolean;
+  findings: FindingDto[];
+  repairs: RepairActionDto[];
+}
+
+export function validateInstance(id: string): Promise<ValidationReportDto> {
+  return invoke<ValidationReportDto>("validate_instance", { id });
+}
+
+/** Run the repair actions validation proposed; returns how many were applied. */
+export function repairInstance(id: string): Promise<number> {
+  return invoke<number>("repair_instance", { id });
+}
+
+/** Dry-run launch preview — argv is ALWAYS redacted backend-side. */
+export interface DryRunLaunchDto {
+  java_executable: string;
+  main_class: string;
+  jvm_args: string[];
+  game_args: string[];
+  argv_redacted: string[];
+  game_dir: string;
+  assets_dir: string;
+}
+
+export function dryRunLaunch(id: string, username: string): Promise<DryRunLaunchDto> {
+  return invoke<DryRunLaunchDto>("dry_run_launch", { id, username });
+}
+
+export interface DirSizeDto {
+  label: string;
+  path: string;
+  bytes: number;
+}
+
+export interface StorageReportDto {
+  instances: DirSizeDto[];
+  cache: DirSizeDto[];
+  total_bytes: number;
+}
+
+export function storageUsage(): Promise<StorageReportDto> {
+  return invoke<StorageReportDto>("storage_usage");
+}
+
+export type TaskState = "queued" | "running" | "completed" | "failed" | "cancelled";
+
+export interface TaskSnapshotDto {
+  id: string;
+  label: string;
+  state: TaskState;
+  current: number;
+  total: number;
+  percent: number;
+  message: string;
+  error_code: string | null;
+  error_message: string | null;
+}
+
+export function taskStatus(): Promise<TaskSnapshotDto[]> {
+  return invoke<TaskSnapshotDto[]>("task_status");
 }

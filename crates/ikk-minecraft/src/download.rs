@@ -9,8 +9,9 @@
 //! - bounded retries; cooperative cancellation via an `AtomicBool`
 //! - progress callbacks carry real byte counts, never estimates
 
-use ikk_core::error::{Error, ErrorCode, Result};
+use ikk_core::error::{classify_io, Error, ErrorCode, Result};
 use sha1::{Digest, Sha1};
+use sha2::Sha256;
 use std::{
     fs,
     io::{Read, Write},
@@ -38,19 +39,60 @@ pub fn sha1_hex(data: &[u8]) -> String {
 
 /// SHA-1 of an on-disk file, streamed (constant memory for multi-GB jars).
 pub fn sha1_file(path: &Path) -> Result<String> {
+    file_hash(path, HashKind::Sha1)
+}
+
+/// Which checksum algorithm the source metadata provides (spec §12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HashKind {
+    Sha1,
+    Sha256,
+}
+
+/// Incremental hasher over the supported algorithms.
+enum Hasher {
+    Sha1(Sha1),
+    Sha256(Sha256),
+}
+
+impl Hasher {
+    fn new(kind: HashKind) -> Self {
+        match kind {
+            HashKind::Sha1 => Hasher::Sha1(Sha1::new()),
+            HashKind::Sha256 => Hasher::Sha256(Sha256::new()),
+        }
+    }
+
+    fn update(&mut self, bytes: &[u8]) {
+        match self {
+            Hasher::Sha1(h) => h.update(bytes),
+            Hasher::Sha256(h) => h.update(bytes),
+        }
+    }
+
+    fn finalize_hex(self) -> String {
+        match self {
+            Hasher::Sha1(h) => hex_encode(&h.finalize()),
+            Hasher::Sha256(h) => hex_encode(&h.finalize()),
+        }
+    }
+}
+
+/// Hash of an on-disk file with the given algorithm, streamed (constant memory).
+pub fn file_hash(path: &Path, kind: HashKind) -> Result<String> {
     let mut file = fs::File::open(path).map_err(|e| {
         Error::with_source(
-            ErrorCode::IoFailure,
+            classify_io(&e),
             format!("cannot open {} for hashing", path.display()),
             e,
         )
     })?;
-    let mut hasher = Sha1::new();
+    let mut hasher = Hasher::new(kind);
     let mut buf = [0u8; 64 * 1024];
     loop {
         let n = file.read(&mut buf).map_err(|e| {
             Error::with_source(
-                ErrorCode::IoFailure,
+                classify_io(&e),
                 format!("read error hashing {}", path.display()),
                 e,
             )
@@ -60,7 +102,30 @@ pub fn sha1_file(path: &Path) -> Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(hex_encode(&hasher.finalize()))
+    Ok(hasher.finalize_hex())
+}
+
+/// A checksum the source promised, e.g. from Mojang version metadata.
+#[derive(Debug, Clone, Copy)]
+pub struct ExpectedHash<'a> {
+    pub kind: HashKind,
+    pub hex: &'a str,
+}
+
+impl<'a> ExpectedHash<'a> {
+    pub fn sha1(hex: &'a str) -> Self {
+        Self {
+            kind: HashKind::Sha1,
+            hex,
+        }
+    }
+
+    pub fn sha256(hex: &'a str) -> Self {
+        Self {
+            kind: HashKind::Sha256,
+            hex,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,8 +164,9 @@ fn cancelled(cancel: &AtomicBool) -> bool {
     cancel.load(Ordering::Relaxed)
 }
 
-/// Download `url` into `dest`, verifying against `expected_sha1` when given.
-/// `on_bytes` receives cumulative byte counts *for this call* (0 for skips).
+/// Download `url` into `dest`, verifying against `expected_sha1` when given
+/// (SHA-1 convenience wrapper over [`download_verified_hash`]). `on_bytes`
+/// receives cumulative byte counts *for this call* (0 for skips).
 pub fn download_verified(
     agent: &ureq::Agent,
     url: &str,
@@ -109,9 +175,30 @@ pub fn download_verified(
     opts: &DownloadOptions,
     on_bytes: &mut dyn FnMut(u64),
 ) -> Result<FileStatus> {
+    download_verified_hash(
+        agent,
+        url,
+        dest,
+        expected_sha1.map(ExpectedHash::sha1),
+        opts,
+        on_bytes,
+    )
+}
+
+/// Generalized verified download: SHA-1 or SHA-256 per source metadata, skip
+/// when a valid copy exists, bounded retries with exponential backoff, atomic
+/// finalization, cooperative cancellation carrying [`ErrorCode::Cancelled`].
+pub fn download_verified_hash(
+    agent: &ureq::Agent,
+    url: &str,
+    dest: &Path,
+    expected: Option<ExpectedHash<'_>>,
+    opts: &DownloadOptions,
+    on_bytes: &mut dyn FnMut(u64),
+) -> Result<FileStatus> {
     // Fast path: already have a valid copy.
-    if let Some(hash) = expected_sha1 {
-        if dest.exists() && sha1_file(dest)? == hash {
+    if let Some(hash) = expected {
+        if dest.exists() && file_hash(dest, hash.kind)? == hash.hex {
             return Ok(FileStatus::Skipped);
         }
     } else if dest.exists() {
@@ -121,30 +208,25 @@ pub fn download_verified(
     }
 
     if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent).map_err(|e| {
-            Error::with_source(
-                ErrorCode::IoFailure,
-                format!("cannot create {}", parent.display()),
-                e,
-            )
-        })?;
+        fs::create_dir_all(parent)
+            .map_err(|e| Error::with_source(classify_io(&e), format!("cannot create {}", parent.display()), e))?;
     }
 
     let tmp = dest.with_extension("part");
     let mut last_err: Option<Error> = None;
 
-    for _attempt in 0..=opts.retries {
+    for attempt in 0..=opts.retries {
         if cancelled(&opts.cancel) {
             let _ = fs::remove_file(&tmp);
-            return Err(Error::new(ErrorCode::Internal, "download cancelled"));
+            return Err(Error::new(ErrorCode::Cancelled, "download cancelled"));
         }
-        match fetch_once(agent, url, &tmp, expected_sha1, on_bytes) {
+        match fetch_once(agent, url, &tmp, expected, on_bytes) {
             Ok(()) => {
                 // Atomic replace: the destination only ever holds a complete,
                 // hash-verified file.
                 fs::rename(&tmp, dest).map_err(|e| {
                     Error::with_source(
-                        ErrorCode::IoFailure,
+                        classify_io(&e),
                         format!("cannot finalize {}", dest.display()),
                         e,
                     )
@@ -157,12 +239,26 @@ pub fn download_verified(
                 last_err = Some(e);
             }
         }
+        // Bounded exponential backoff between attempts (spec §63): 250ms,
+        // 500ms, 1s… capped at 4s. Skipped after the final attempt and when
+        // cancellation was requested during the failure.
+        if attempt < opts.retries && !cancelled(&opts.cancel) {
+            let delay = std::time::Duration::from_millis(250u64.saturating_mul(1 << attempt.min(4)));
+            std::thread::sleep(delay);
+        }
     }
 
     Err(last_err.unwrap_or_else(|| Error::new(ErrorCode::NetworkTimeout, "download failed")))
 }
 
 /// One transfer attempt.
+fn fetch_once(
+    agent: &ureq::Agent,
+    url: &str,
+    tmp: &Path,
+    expected: Option<ExpectedHash<'_>>,
+    on_bytes: &mut dyn FnMut(u64),
+) -> Result<()> {
 fn fetch_once(
     agent: &ureq::Agent,
     url: &str,
@@ -179,15 +275,10 @@ fn fetch_once(
     }
 
     let mut reader = response.into_reader();
-    let mut file = fs::File::create(tmp).map_err(|e| {
-        Error::with_source(
-            ErrorCode::IoFailure,
-            format!("cannot create {}", tmp.display()),
-            e,
-        )
-    })?;
+    let mut file = fs::File::create(tmp)
+        .map_err(|e| Error::with_source(classify_io(&e), format!("cannot create {}", tmp.display()), e))?;
 
-    let mut hasher = Sha1::new();
+    let mut hasher = Hasher::new(expected.map_or(HashKind::Sha1, |h| h.kind));
     let mut buf = [0u8; 64 * 1024];
     let mut total: u64 = 0;
     loop {
@@ -195,19 +286,24 @@ fn fetch_once(
         if n == 0 {
             break;
         }
-        file.write_all(&buf[..n]).map_err(map_io(url))?;
+        file.write_all(&buf[..n])
+            .map_err(|e| Error::with_source(classify_io(&e), format!("I/O error during {url}"), e))?;
         hasher.update(&buf[..n]);
         total += n as u64;
         on_bytes(total);
     }
-    file.flush().map_err(map_io(url))?;
+    file.flush()
+        .map_err(|e| Error::with_source(classify_io(&e), format!("I/O error during {url}"), e))?;
 
-    let actual = hex_encode(&hasher.finalize());
-    if let Some(expected) = expected_sha1 {
-        if !actual.eq_ignore_ascii_case(expected) {
+    let actual = hasher.finalize_hex();
+    if let Some(expected) = expected {
+        if !actual.eq_ignore_ascii_case(expected.hex) {
             return Err(Error::new(
                 ErrorCode::ChecksumMismatch,
-                format!("checksum mismatch downloading {url}: expected {expected}, got {actual}"),
+                format!(
+                    "checksum mismatch downloading {url}: expected {}, got {actual}",
+                    expected.hex
+                ),
             ));
         }
     }
@@ -229,7 +325,13 @@ fn map_ureq(url: &str) -> impl Fn(ureq::Error) -> Error + '_ {
 }
 
 fn map_io(url: &str) -> impl Fn(std::io::Error) -> Error + '_ {
-    move |e| Error::with_source(ErrorCode::IoFailure, format!("I/O error during {url}"), e)
+    move |e| {
+        Error::with_source(
+            classify_io(&e),
+            format!("I/O error during {url}"),
+            e,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -254,6 +356,21 @@ mod tests {
         let payload = vec![42u8; 200_000]; // > buffer size, exercises streaming
         fs::write(&path, &payload).unwrap();
         assert_eq!(sha1_file(&path).unwrap(), sha1_hex(&payload));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sha256_vectors_and_file_hash() {
+        // Known vector: SHA-256("hello").
+        let dir = std::env::temp_dir().join(format!("ikk-dl-sha2-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("blob.bin");
+        fs::write(&path, b"hello").unwrap();
+        assert_eq!(
+            file_hash(&path, HashKind::Sha256).unwrap(),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+        assert_eq!(file_hash(&path, HashKind::Sha1).unwrap(), sha1_hex(b"hello"));
         let _ = fs::remove_dir_all(&dir);
     }
 

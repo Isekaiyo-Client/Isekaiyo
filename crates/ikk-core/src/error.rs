@@ -21,6 +21,12 @@ pub enum ErrorCode {
     JavaNotFound,
     IoFailure,
     Internal,
+    /// User or system cancelled an operation — distinct from failure (§62).
+    Cancelled,
+    /// Disk full during download/write — actionable message possible.
+    DiskFull,
+    /// Permission denied writing an artifact.
+    PermissionDenied,
 }
 
 impl ErrorCode {
@@ -38,6 +44,9 @@ impl ErrorCode {
             ErrorCode::JavaNotFound => "java.not_found",
             ErrorCode::IoFailure => "io.failure",
             ErrorCode::Internal => "internal.error",
+            ErrorCode::Cancelled => "operation.cancelled",
+            ErrorCode::DiskFull => "io.disk_full",
+            ErrorCode::PermissionDenied => "io.permission_denied",
         }
     }
 }
@@ -80,6 +89,25 @@ impl Error {
     /// Stable machine-readable category. Never changes meaning across releases.
     pub fn code(&self) -> ErrorCode {
         self.code
+    }
+}
+
+/// Map an I/O error to the most precise stable category (spec §62): the UI can
+/// say "disk full" instead of "something went wrong".
+pub fn classify_io(err: &std::io::Error) -> ErrorCode {
+    match err.kind() {
+        std::io::ErrorKind::StorageFull => ErrorCode::DiskFull,
+        std::io::ErrorKind::PermissionDenied => ErrorCode::PermissionDenied,
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidInput => ErrorCode::IoFailure,
+        _ => {
+            // raw_os_error covers platform-specific full-disk codes that
+            // ErrorKind misses on some targets.
+            match err.raw_os_error() {
+                Some(28) => ErrorCode::DiskFull,     // ENOSPC (linux/macos)
+                Some(13) => ErrorCode::PermissionDenied, // EACCES
+                _ => ErrorCode::IoFailure,
+            }
+        }
     }
 }
 
