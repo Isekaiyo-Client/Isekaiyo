@@ -12,6 +12,8 @@
 //! - [`planner`] — LaunchPlan construction (JVM + game args); the UI never builds args
 //! - [`process`] — cross-platform spawn/output-capture/exit tracking
 //! - [`state`] — the launch state machine
+//! - [`mods`] — mod management: sources (Modrinth), dependency resolution,
+//!   staged installs, inventory reconciliation, profiles
 
 pub mod account;
 pub mod assets;
@@ -20,6 +22,7 @@ pub mod java;
 pub mod loaders;
 pub mod manifest;
 pub mod metadata;
+pub mod mods;
 pub mod natives;
 pub mod planner;
 pub mod process;
@@ -47,6 +50,29 @@ pub fn http_agent() -> Result<ureq::Agent> {
         .timeout_connect(std::time::Duration::from_secs(10))
         .timeout_read(std::time::Duration::from_secs(30))
         .build())
+}
+
+/// [`fetch_text`] with a caller-supplied User-Agent (Modrinth requires an
+/// identifying UA; Mojang metadata does not need one).
+pub fn fetch_text_with(agent: &ureq::Agent, url: &str, user_agent: &str) -> Result<String> {
+    match agent.get(url).set("User-Agent", user_agent).call() {
+        Ok(response) => response.into_string().map_err(|e| {
+            ikk_core::Error::with_source(
+                ikk_core::ErrorCode::MetadataInvalid,
+                format!("failed reading body of {url}"),
+                e,
+            )
+        }),
+        Err(ureq::Error::Status(status, _)) => Err(ikk_core::Error::new(
+            ikk_core::ErrorCode::MetadataInvalid,
+            format!("HTTP {status} fetching {url}"),
+        )),
+        Err(e) => Err(ikk_core::Error::with_source(
+            ikk_core::ErrorCode::NetworkTimeout,
+            format!("network error fetching {url}"),
+            e,
+        )),
+    }
 }
 
 /// Fetch a URL as UTF-8 text (manifests, metadata). Network errors map to the

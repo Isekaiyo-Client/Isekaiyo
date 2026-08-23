@@ -66,6 +66,110 @@ pub struct LaunchStatusDto {
     pub log_path: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Mod management DTOs (Phase 6). Remote marketplace data and local
+// installation state are separate shapes here too — mirroring the domain.
+// ---------------------------------------------------------------------------
+
+/// One search hit from a mod source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModProjectDto {
+    pub source: String,
+    pub project_id: String,
+    pub title: String,
+    pub description: String,
+    pub authors: Vec<String>,
+    pub icon_url: Option<String>,
+    pub downloads: u64,
+    pub categories: Vec<String>,
+    pub game_versions: Vec<String>,
+}
+
+/// One compatible version offered for installation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModVersionDto {
+    pub version_id: String,
+    pub version_number: String,
+    pub release_type: String,
+    pub filename: String,
+    pub size_bytes: u64,
+    pub hash_verified_source: bool,
+}
+
+/// Result of resolving an install request BEFORE anything downloads —
+/// the confirmation dialog's payload (§31).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModInstallPlanDto {
+    /// Mods that will be newly downloaded.
+    pub to_install: Vec<ModProjectDto>,
+    /// Projects already present that satisfy dependencies.
+    pub already_installed: Vec<String>,
+    /// Required deps with no compatible version (blocks install).
+    pub unsatisfiable: Vec<String>,
+    /// Installed projects the requested mod declares incompatible with.
+    pub conflicts: Vec<String>,
+}
+
+impl ModInstallPlanDto {
+    pub fn is_installable(&self) -> bool {
+        self.unsatisfiable.is_empty() && self.conflicts.is_empty()
+    }
+}
+
+/// Report of a completed install run.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModInstallReportDto {
+    pub downloaded: Vec<String>,
+    pub skipped: Vec<String>,
+    /// Downloaded without a source-provided sha1 — surfaced honestly.
+    pub unverified: Vec<String>,
+    pub failed: Vec<String>,
+}
+
+impl ModInstallReportDto {
+    pub fn ok(&self) -> bool {
+        self.failed.is_empty()
+    }
+}
+
+/// Local installation state of one mod row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledModDto {
+    pub source: String,
+    pub project_id: Option<String>,
+    pub title: String,
+    pub filename: String,
+    pub version_number: Option<String>,
+    pub enabled: bool,
+    /// "managed" | "external" | "missing"
+    pub state: String,
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModInventoryDto {
+    pub mods: Vec<InstalledModDto>,
+}
+
+/// A named mod configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModProfileDto {
+    pub id: String,
+    pub name: String,
+    pub enabled_count: u32,
+    pub active: bool,
+}
+
+/// Per-mod update classification (§24).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModUpdateDto {
+    pub project_id: String,
+    pub installed_version: String,
+    pub available_version: Option<String>,
+    /// "current" | "update-available" | "incompatible" | "unknown"
+    pub state: String,
+}
+
 /// Serializable projection of [`ikk_core::Error`] for command failures.
 /// `code` is the stable taxonomy string (`instance.invalid`, …) so the UI can
 /// branch on category without parsing messages.

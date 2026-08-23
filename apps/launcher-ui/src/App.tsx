@@ -18,6 +18,7 @@ import { Banner } from "./components/ui";
 import { About } from "./views/About";
 import { Home } from "./views/Home";
 import { Instances } from "./views/Instances";
+import { Mods } from "./views/Mods";
 import { Placeholder } from "./views/Placeholder";
 import { Settings } from "./views/Settings";
 
@@ -34,7 +35,7 @@ type Section =
 const NAV: readonly { id: Section; label: string; soon?: boolean }[] = [
   { id: "home", label: "Home" },
   { id: "instances", label: "Instances" },
-  { id: "mods", label: "Mods", soon: true },
+  { id: "mods", label: "Mods" },
   { id: "marketplace", label: "Marketplace", soon: true },
   { id: "client", label: "Client", soon: true },
   { id: "accounts", label: "Accounts", soon: true },
@@ -166,7 +167,14 @@ export default function App() {
             onRefresh={refreshInstances}
           />
         )}
-        {(section === "mods" || section === "marketplace" || section === "client" || section === "accounts") && (
+        {section === "mods" && config && (
+          <Mods
+            instance={
+              listing?.instances.find((i) => i.id === config.selected_instance) ?? null
+            }
+          />
+        )}
+        {(section === "marketplace" || section === "client" || section === "accounts") && (
           <Placeholder section={section.charAt(0).toUpperCase() + section.slice(1)} />
         )}
         {section === "about" && <About info={info} />}

@@ -2,6 +2,33 @@
 
 Status: **Accepted** · Phase 0 deliverable · Deep-dive companions: [launcher](launcher-architecture.md) · [client](client-architecture.md) · [instances](instance-architecture.md) · [versions](version-architecture.md)
 
+## 0.1 Mod Management (Phase 6)
+
+Lives in `ikk-minecraft::mods` — the same engine crate, one new subsystem, no
+new dependency edges. The three architectural rules from the spec are enforced
+by module structure:
+
+1. **Remote ≠ local.** `RemoteProject`/`ProjectVersion`/`ModFile` describe what
+   a source knows; `InstalledMod`/`ModsData` describe what the user has. No
+   struct mixes them, and remote responses are never persisted verbatim.
+2. **Mod management ≠ core launcher.** The launch pipeline is untouched; mods
+   land in `<instance>/game/mods` and Minecraft loads them at runtime.
+3. **New source = implement one trait.** `mods::source::ModSource` (search /
+   project / versions). `ModrinthSource` implements it against the official v2
+   REST API with an identifying User-Agent; Local/Isekaiyo sources slot in
+   without touching resolver, installer, or UI.
+
+Flow: UI → typed commands (`mods_*`) → `resolver::resolve` (cycle-safe
+transitive closure over mc+loader compatibility, optional/incompatible edges
+honored) → confirmation DTO → staged install (`download_verified`: sha1,
+`.part` + atomic rename, skip-if-valid) → `InstalledMod` rows committed to
+`<instance>/ikk/mods.json` only when every file succeeded.
+
+Reconciliation classifies every jar as `managed`, `external`
+(user-placed, never auto-deleted), or `missing` (tracked but vanished,
+reported not pruned). Enable/disable is a reversible `.disabled` suffix rename;
+profiles snapshot enabled sets and switching renames files only.
+
 ## 0. Implementation Status (Phase 2)
 
 This document describes the *target* architecture. What actually exists in code today:

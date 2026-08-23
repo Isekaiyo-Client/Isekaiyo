@@ -180,3 +180,145 @@ export function stopLaunch(): Promise<boolean> {
 export function readLaunchLog(maxBytes = 65536): Promise<string> {
   return invoke<string>("read_launch_log", { maxBytes });
 }
+
+// -- mod management (Phase 6) -------------------------------------------------
+// Remote marketplace data (ModProjectDto) and local installation state
+// (InstalledModDto) are separate shapes — mirroring the domain rule that
+// they are never one object.
+
+export interface ModProjectDto {
+  source: string;
+  project_id: string;
+  title: string;
+  description: string;
+  authors: string[];
+  icon_url: string | null;
+  downloads: number;
+  categories: string[];
+  game_versions: string[];
+}
+
+export interface ModVersionDto {
+  version_id: string;
+  version_number: string;
+  release_type: "release" | "beta" | "alpha" | string;
+  filename: string;
+  size_bytes: number;
+  hash_verified_source: boolean;
+}
+
+export interface ModInstallPlanDto {
+  to_install: ModProjectDto[];
+  already_installed: string[];
+  unsatisfiable: string[];
+  conflicts: string[];
+}
+
+export interface ModInstallReportDto {
+  downloaded: string[];
+  skipped: string[];
+  unverified: string[];
+  failed: string[];
+}
+
+export type ModState = "managed" | "external" | "missing";
+
+export interface InstalledModDto {
+  source: string;
+  project_id: string | null;
+  title: string;
+  filename: string;
+  version_number: string | null;
+  enabled: boolean;
+  state: ModState;
+  warning: string | null;
+}
+
+export interface ModInventoryDto {
+  mods: InstalledModDto[];
+}
+
+export interface ModProfileDto {
+  id: string;
+  name: string;
+  enabled_count: number;
+  active: boolean;
+}
+
+export interface ModUpdateDto {
+  project_id: string;
+  installed_version: string;
+  available_version: string | null;
+  state: "current" | "update-available" | "incompatible" | "unknown";
+}
+
+/** Search a mod source scoped to the instance's Minecraft version + loader. */
+export function modsSearch(
+  instanceId: string,
+  query: string,
+  sort?: string,
+  page = 1,
+): Promise<ModProjectDto[]> {
+  return invoke<ModProjectDto[]>("mods_search", { instanceId, query, sort, page });
+}
+
+export function modsCompatibleVersions(
+  instanceId: string,
+  source: string,
+  projectId: string,
+): Promise<ModVersionDto[]> {
+  return invoke<ModVersionDto[]>("mods_compatible_versions", { instanceId, source, projectId });
+}
+
+/** Resolve what an install would do WITHOUT downloading anything. */
+export function modsInstallPlan(
+  instanceId: string,
+  source: string,
+  projectId: string,
+): Promise<ModInstallPlanDto> {
+  return invoke<ModInstallPlanDto>("mods_install_plan", { instanceId, source, projectId });
+}
+
+export function modsInstall(
+  instanceId: string,
+  source: string,
+  projectId: string,
+): Promise<ModInstallReportDto> {
+  return invoke<ModInstallReportDto>("mods_install", { instanceId, source, projectId });
+}
+
+export function modsInventory(instanceId: string): Promise<ModInventoryDto> {
+  return invoke<ModInventoryDto>("mods_inventory", { instanceId });
+}
+
+export function modsSetEnabled(
+  instanceId: string,
+  projectId: string,
+  enabled: boolean,
+): Promise<void> {
+  return invoke<void>("mods_set_enabled", { instanceId, projectId, enabled });
+}
+
+export function modsRemove(
+  instanceId: string,
+  projectId: string,
+  force = false,
+): Promise<void> {
+  return invoke<void>("mods_remove", { instanceId, projectId, force });
+}
+
+export function modsUpdates(instanceId: string): Promise<ModUpdateDto[]> {
+  return invoke<ModUpdateDto[]>("mods_updates", { instanceId });
+}
+
+export function modsListProfiles(instanceId: string): Promise<ModProfileDto[]> {
+  return invoke<ModProfileDto[]>("mods_list_profiles", { instanceId });
+}
+
+export function modsCreateProfile(instanceId: string, name: string): Promise<ModProfileDto[]> {
+  return invoke<ModProfileDto[]>("mods_create_profile", { instanceId, name });
+}
+
+export function modsSwitchProfile(instanceId: string, profileId: string | null): Promise<void> {
+  return invoke<void>("mods_switch_profile", { instanceId, profileId });
+}

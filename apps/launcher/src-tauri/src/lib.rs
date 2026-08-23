@@ -687,6 +687,511 @@ fn transition(data: &State<'_, Mutex<AppData>>, next: LaunchPhase) -> Result<(),
 }
 
 // ---------------------------------------------------------------------------
+// Mod management (Phase 6): search → resolve → confirm → staged install.
+// All HTTP lives in ikk_minecraft::mods; these commands are thin adapters
+// that own only path resolution and state persistence.
+// ---------------------------------------------------------------------------
+
+use ikk_minecraft::mods::install::{
+    self as mods_install, ModsData, ModsStore,
+};
+use ikk_minecraft::mods::modrinth::{parse_versions, USER_AGENT as MODRINTH_UA};
+use ikk_minecraft::mods::resolver::{self, InstanceContext, VersionLookup};
+use ikk_minecraft::mods::{ProjectRef, SourceKind};
+
+fn instance_dirs(app: &AppData, id: &str) -> (PathBuf, PathBuf) {
+    let game = game_dir_of(&app.data_dir, id);
+    (game.join("ikk"), game.join("mods"))
+}
+
+fn load_mods_data(app: &AppData, id: &str) -> Result<ModsData, CommandError> {
+    let (ikk_dir, _) = instance_dirs(app, id);
+    match ModsStore::new(&ikk_dir).load() {
+        Ok((data, _)) => Ok(data),
+        Err(e) => Err(CommandError::from(e)),
+    }
+}
+
+fn save_mods_data(app: &AppData, id: &str, data: &ModsData) -> Result<(), CommandError> {
+    let (ikk_dir, _) = instance_dirs(app, id);
+    ModsStore::new(&ikk_dir)
+        .save(data)
+        .map_err(CommandError::from)
+}
+
+fn parse_source(source: &str) -> Result<SourceKind, CommandError> {
+    match source {
+        "modrinth" => Ok(SourceKind::Modrinth),
+        other => Err(CommandError::internal(format!(
+            "unknown mod source {other:?}"
+        ))),
+    }
+}
+
+/// Network-backed version lookup with request dedup within one resolve run.
+struct NetLookup<'a> {
+    agent: &'a ureq::Agent,
+    cache: std::collections::HashMap<String, Vec<ikk_minecraft::mods::ProjectVersion>>,
+}
+
+impl<'a> NetLookup<'a> {
+    fn new(agent: &'a ureq::Agent) -> Self {
+        Self {
+            agent,
+            cache: std::collections::HashMap::new(),
+        }
+    }
+}
+
+impl VersionLookup for NetLookup<'_> {
+    fn versions_of(
+        &mut self,
+        project_id: &str,
+    ) -> ikk_core::Result<Vec<ikk_minecraft::mods::ProjectVersion>> {
+        if let Some(v) = self.cache.get(project_id) {
+            return Ok(v.clone());
+        }
+        let reference = ProjectRef::new(SourceKind::Modrinth, project_id);
+        let url = format!(
+            "https://api.modrinth.com/v2/project/{}/version",
+            reference.project_id
+        );
+        let json = ikk_minecraft::fetch_text_with(self.agent, &url, MODRINTH_UA)?;
+        let versions = parse_versions(&json)?;
+        self.cache.insert(project_id.to_owned(), versions.clone());
+        Ok(versions)
+    }
+}
+
+fn instance_context_of(instance: &Instance) -> InstanceContext {
+    InstanceContext::new(
+        instance.minecraft_version.as_str().to_owned(),
+        loader_id_of(&instance.loader.kind).as_str().to_owned(),
+    )
+}
+
+/// Search a mod source, scoped to the instance's Minecraft version + loader.
+#[tauri::command]
+fn mods_search(
+    data: State<'_, Mutex<AppData>>,
+    instance_id: String,
+    query: String,
+    sort: Option<String>,
+    page: u32,
+) -> Result<Vec<ikk_api_types::ModProjectDto>, CommandError> {
+    let (instance, agent) = {
+        let app = lock(&data)?;
+        (find_instance(&app, &instance_id)?, app.agent.clone())
+    };
+    let ctx = instance_context_of(&instance);
+    let q = ikk_minecraft::mods::source::SearchQuery {
+        text: query,
+        game_versions: vec![ctx.game_version],
+        loaders: vec![ctx.loader],
+        categories: Vec::new(),
+        sort,
+        page: page.max(1),
+    };
+    let hits = <ikk_minecraft::mods::modrinth::ModrinthSource as ikk_minecraft::mods::source::ModSource>::search(
+        &ikk_minecraft::mods::modrinth::ModrinthSource,
+        &agent,
+        &q,
+    )?;
+    Ok(hits
+        .into_iter()
+        .map(|h| ikk_api_types::ModProjectDto {
+            source: h.project.reference.source.as_str().to_owned(),
+            project_id: h.project.reference.project_id,
+            title: h.project.title,
+            description: h.project.description,
+            authors: h.project.authors,
+            icon_url: h.project.icon_url,
+            downloads: h.project.downloads,
+            categories: h.project.categories,
+            game_versions: h.project.game_versions,
+        })
+        .collect())
+}
+
+/// Versions of one project that support THIS instance (compatibility is
+/// resolved server-of-truth side, then filtered here).
+#[tauri::command]
+fn mods_compatible_versions(
+    data: State<'_, Mutex<AppData>>,
+    instance_id: String,
+    source: String,
+    project_id: String,
+) -> Result<Vec<ikk_api_types::ModVersionDto>, CommandError> {
+    let (instance, agent) = {
+        let app = lock(&data)?;
+        (find_instance(&app, &instance_id)?, app.agent.clone())
+    };
+    parse_source(&source)?;
+    let ctx = instance_context_of(&instance);
+    let url = format!(
+        "https://api.modrinth.com/v2/project/{project_id}/version"
+    );
+    let json = ikk_minecraft::fetch_text_with(&agent, &url, MODRINTH_UA)?;
+    let versions = parse_versions(&json)?;
+    Ok(versions
+        .iter()
+        .filter(|v| v.supports(&ctx.game_version, &ctx.loader))
+        .map(|v| {
+            let file = v.primary_file();
+            ikk_api_types::ModVersionDto {
+                version_id: v.version_id.clone(),
+                version_number: v.version_number.clone(),
+                release_type: v.release_type.clone(),
+                filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
+                size_bytes: file.map(|f| f.size_bytes).unwrap_or(0),
+                hash_verified_source: file.and_then(|f| f.sha1.as_ref()).is_some(),
+            }
+        })
+        .collect())
+}
+
+/// Resolve an install request into a confirmation payload WITHOUT touching
+/// disk. The UI shows this first (§30/§31).
+#[tauri::command]
+fn mods_install_plan(
+    data: State<'_, Mutex<AppData>>,
+    instance_id: String,
+    source: String,
+    project_id: String,
+) -> Result<ikk_api_types::ModInstallPlanDto, CommandError> {
+    let (instance, installed, agent) = {
+        let app = lock(&data)?;
+        (
+            find_instance(&app, &instance_id)?,
+            load_mods_data(&app, &instance_id)?.installed,
+            app.agent.clone(),
+        )
+    };
+    parse_source(&source)?;
+    let ctx = instance_context_of(&instance);
+    let mut lookup = NetLookup::new(&agent);
+    let plan = resolver::resolve(&project_id, &ctx, &mut lookup, &installed)?;
+    Ok(plan_to_dto(&plan))
+}
+
+fn plan_to_dto(
+    plan: &ikk_minecraft::mods::resolver::InstallPlan,
+) -> ikk_api_types::ModInstallPlanDto {
+    ikk_api_types::ModInstallPlanDto {
+        to_install: plan
+            .to_install
+            .iter()
+            .map(|v| ikk_api_types::ModProjectDto {
+                source: v.project.source.as_str().to_owned(),
+                project_id: v.project.project_id.clone(),
+                title: v.version_number.clone(), // display name arrives with details fetch
+                description: String::new(),
+                authors: Vec::new(),
+                icon_url: None,
+                downloads: 0,
+                categories: Vec::new(),
+                game_versions: v.game_versions.clone(),
+            })
+            .collect(),
+        already_installed: plan
+            .already_installed
+            .iter()
+            .map(|p| p.project_id.clone())
+            .collect(),
+        unsatisfiable: plan.unsatisfiable.clone(),
+        conflicts: plan.conflicts.iter().map(|c| c.project_title.clone()).collect(),
+    }
+}
+
+/// The real installation: staged download → verify → commit files → record.
+/// Metadata is written only when every file succeeded (atomic at the set level).
+#[tauri::command]
+fn mods_install(
+    data: State<'_, Mutex<AppData>>,
+    instance_id: String,
+    source: String,
+    project_id: String,
+) -> Result<ikk_api_types::ModInstallReportDto, CommandError> {
+    let (instance, mut mods_data, agent, cancel) = {
+        let app = lock(&data)?;
+        (
+            find_instance(&app, &instance_id)?,
+            load_mods_data(&app, &instance_id)?,
+            app.agent.clone(),
+            app.cancel_flag(),
+        )
+    };
+    parse_source(&source)?;
+    let (_, mods_dir) = instance_dirs(&lock(&data)?, &instance_id);
+
+    let ctx = instance_context_of(&instance);
+    let mut lookup = NetLookup::new(&agent);
+    let plan = resolver::resolve(&project_id, &ctx, &mut lookup, &mods_data.installed)?;
+    if !plan.unsatisfiable.is_empty() || !plan.conflicts.is_empty() {
+        return Err(CommandError::from(ikk_core::Error::new(
+            ikk_core::ErrorCode::InstanceInvalid,
+            format!(
+                "cannot install {}: {}",
+                project_id,
+                if !plan.unsatisfiable.is_empty() {
+                    format!("unsatisfiable: {}", plan.unsatisfiable.join("; "))
+                } else {
+                    format!("conflicts with: {}", plan.summary)
+                }
+            ),
+        )));
+    }
+
+    let opts = DownloadOptions {
+        retries: 2,
+        cancel,
+    };
+    let (outcome, rows) = mods_install::install_plan(&agent, &plan.to_install, &mods_dir, &opts)
+        .map_err(CommandError::from)?;
+
+    let report = ikk_api_types::ModInstallReportDto {
+        downloaded: outcome.downloaded.clone(),
+        skipped: outcome.skipped.clone(),
+        unverified: outcome.unverified.clone(),
+        failed: outcome.failed.clone(),
+    };
+
+    if outcome.ok() {
+        for row in rows {
+            mods_data.installed.retain(|m| m.project != row.project);
+            mods_data.installed.push(row);
+        }
+        save_mods_data(&data, &instance_id, &mods_data)?;
+        info!(instance = %instance_id, count = report.downloaded.len() + report.skipped.len(), "mods installed");
+    }
+    Ok(report)
+}
+
+/// Inventory = persisted metadata reconciled against the actual directory.
+#[tauri::command]
+fn mods_inventory(
+    data: State<'_, Mutex<AppData>>,
+    instance_id: String,
+) -> Result<ikk_api_types::ModInventoryDto, CommandError> {
+    let (mods_data, (_, mods_dir)) = {
+        let app = lock(&data)?;
+        let dirs = instance_dirs(&app, &instance_id);
+        (load_mods_data(&app, &instance_id)?, dirs)
+    };
+    let inv = ikk_minecraft::mods::install::reconcile(&mods_data, &mods_dir);
+    Ok(ikk_api_types::ModInventoryDto {
+        mods: inv
+            .mods
+            .iter()
+            .map(|e| ikk_api_types::InstalledModDto {
+                source: e
+                    .project
+                    .as_ref()
+                    .map(|p| p.source.as_str().to_owned())
+                    .unwrap_or_else(|| "local".to_owned()),
+                project_id: e.project.as_ref().map(|p| p.project_id.clone()),
+                title: e.title.clone(),
+                filename: e.filename.clone(),
+                version_number: e.version_number.clone(),
+                enabled: e.enabled,
+                state: match e.state {
+                    ikk_minecraft::mods::ManagedState::Managed => "managed".to_owned(),
+                    ikk_minecraft::mods::ManagedState::External => "external".to_owned(),
+                    ikk_minecraft::mods::ManagedState::Missing => "missing".to_owned(),
+                },
+                warning: e.warning.clone(),
+            })
+            .collect(),
+    })
+}
+
+/// Enable or disable ONE tracked mod (reversible file rename). External jars
+/// are rejected — their toggling belongs to the user's file manager.
+#[tauri::command]
+fn mods_set_enabled(
+    data: State<'_, Mutex<AppData>>,
+    instance_id: String,
+    project_id: String,
+    enabled: bool,
+) -> Result<(), CommandError> {
+    let mut mods_data = {
+        let app = lock(&data)?;
+        load_mods_data(&app, &instance_id)?
+    };
+    let (_, mods_dir) = instance_dirs(&lock(&data)?, &instance_id);
+    let reference = ProjectRef::new(SourceKind::Modrinth, &project_id);
+    let Some(row) = mods_data
+        .installed
+        .iter_mut()
+        .find(|m| m.project == reference)
+    else {
+        return Err(CommandError::from(ikk_core::Error::new(
+            ikk_core::ErrorCode::InstanceNotFound,
+            format!("no tracked mod {project_id}"),
+        )));
+    };
+    row.enabled = enabled;
+    ikk_minecraft::mods::install::apply_enabled_state(&mut mods_data, &mods_dir)
+        .map_err(CommandError::from)?;
+    save_mods_data(&data, &instance_id, &mods_data)
+}
+
+/// Remove a managed mod. Refuses while other tracked mods still require it
+/// (reverse-dependency analysis); pass `force` after showing the user why.
+#[tauri::command]
+fn mods_remove(
+    data: State<'_, Mutex<AppData>>,
+    instance_id: String,
+    project_id: String,
+    force: bool,
+) -> Result<(), CommandError> {
+    let mut mods_data = {
+        let app = lock(&data)?;
+        load_mods_data(&app, &instance_id)?
+    };
+    let (_, mods_dir) = instance_dirs(&lock(&data)?, &instance_id);
+    let reference = ProjectRef::new(SourceKind::Modrinth, &project_id);
+    if !force {
+        let blockers = ikk_minecraft::mods::resolver::reverse_dependencies(
+            &reference,
+            &mods_data.installed,
+            &[reference.clone()],
+        );
+        if !blockers.is_empty() {
+            let names: Vec<String> = blockers.iter().map(|p| p.project_id.clone()).collect();
+            return Err(CommandError::from(ikk_core::Error::new(
+                ikk_core::ErrorCode::InstanceInvalid,
+                format!(
+                    "{project_id} is still required by: {}. Remove those first, or confirm forced removal.",
+                    names.join(", ")
+                ),
+            )));
+        }
+    }
+    let removed = ikk_minecraft::mods::install::remove_managed(&mut mods_data, &mods_dir, &reference)
+        .map_err(CommandError::from)?;
+    if removed {
+        save_mods_data(&data, &instance_id, &mods_data)?;
+        info!(instance = %instance_id, %project_id, "mod removed");
+    }
+    Ok(())
+}
+
+/// Update detection across every managed mod (§24).
+#[tauri::command]
+fn mods_updates(
+    data: State<'_, Mutex<AppData>>,
+    instance_id: String,
+) -> Result<Vec<ikk_api_types::ModUpdateDto>, CommandError> {
+    let (instance, mods_data, agent) = {
+        let app = lock(&data)?;
+        (
+            find_instance(&app, &instance_id)?,
+            load_mods_data(&app, &instance_id)?,
+            app.agent.clone(),
+        )
+    };
+    let ctx = instance_context_of(&instance);
+    let mut updates = Vec::new();
+    for m in &mods_data.installed {
+        let url = format!(
+            "https://api.modrinth.com/v2/project/{}/version",
+            m.project.project_id
+        );
+        let state = match ikk_minecraft::fetch_text_with(&agent, &url, MODRINTH_UA)
+            .and_then(|j| parse_versions(&j))
+        {
+            Ok(available) => {
+                let s = ikk_minecraft::mods::resolver::update_state(m, &available, &ctx);
+                let best = ikk_minecraft::mods::resolver::select_compatible(&available, &ctx);
+                (s, best.map(|b| b.version_number.clone()))
+            }
+            Err(_) => (
+                ikk_minecraft::mods::resolver::UpdateState::Unknown,
+                None,
+            ),
+        };
+        use ikk_minecraft::mods::resolver::UpdateState as US;
+        updates.push(ikk_api_types::ModUpdateDto {
+            project_id: m.project.project_id.clone(),
+            installed_version: m.version_number.clone(),
+            available_version: state.1,
+            state: match state.0 {
+                US::Current => "current",
+                US::UpdateAvailable => "update-available",
+                US::Incompatible => "incompatible",
+                US::Unknown => "unknown",
+            }
+            .to_owned(),
+        });
+    }
+    Ok(updates)
+}
+
+// -- mod profiles ------------------------------------------------------------
+
+fn profiles_to_dto(mods_data: &ModsData) -> Vec<ikk_api_types::ModProfileDto> {
+    mods_data
+        .profiles
+        .iter()
+        .map(|p| ikk_api_types::ModProfileDto {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            enabled_count: p.enabled_projects.len() as u32,
+            active: mods_data.active_profile.as_deref() == Some(p.id.as_str()),
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn mods_list_profiles(
+    data: State<'_, Mutex<AppData>>,
+    instance_id: String,
+) -> Result<Vec<ikk_api_types::ModProfileDto>, CommandError> {
+    let app = lock(&data)?;
+    Ok(profiles_to_dto(&load_mods_data(&app, &instance_id)?))
+}
+
+#[tauri::command]
+fn mods_create_profile(
+    data: State<'_, Mutex<AppData>>,
+    instance_id: String,
+    name: String,
+) -> Result<Vec<ikk_api_types::ModProfileDto>, CommandError> {
+    let mut mods_data = {
+        let app = lock(&data)?;
+        load_mods_data(&app, &instance_id)?
+    };
+    let id = format!("profile-{}", mods_data.profiles.len() + 1);
+    let profile = ikk_minecraft::mods::install::create_profile_from_current(&mods_data, id, name)
+        .map_err(CommandError::from)?;
+    mods_data.profiles.push(profile);
+    {
+        let app = lock(&data)?;
+        save_mods_data(&app, &instance_id, &mods_data)?;
+    }
+    Ok(profiles_to_dto(&mods_data))
+}
+
+/// Switch the active profile (`null` resets to all-enabled). Files are
+/// renamed on disk; no downloads occur.
+#[tauri::command]
+fn mods_switch_profile(
+    data: State<'_, Mutex<AppData>>,
+    instance_id: String,
+    profile_id: Option<String>,
+) -> Result<(), CommandError> {
+    let mut mods_data = {
+        let app = lock(&data)?;
+        load_mods_data(&app, &instance_id)?
+    };
+    let (_, mods_dir) = instance_dirs(&lock(&data)?, &instance_id);
+    ikk_minecraft::mods::install::switch_profile(&mut mods_data, &mods_dir, profile_id.as_deref())
+        .map_err(CommandError::from)?;
+    save_mods_data(&data, &instance_id, &mods_data)
+}
+
+// ---------------------------------------------------------------------------
 // Error helpers
 // ---------------------------------------------------------------------------
 
@@ -786,7 +1291,18 @@ pub fn run() {
             launch_instance,
             launch_status,
             stop_launch,
-            read_launch_log
+            read_launch_log,
+            mods_search,
+            mods_compatible_versions,
+            mods_install_plan,
+            mods_install,
+            mods_inventory,
+            mods_set_enabled,
+            mods_remove,
+            mods_updates,
+            mods_list_profiles,
+            mods_create_profile,
+            mods_switch_profile
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {
