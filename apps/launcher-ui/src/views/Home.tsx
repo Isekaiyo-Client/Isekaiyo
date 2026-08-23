@@ -1,20 +1,22 @@
 // Home — the launcher dashboard. Play runs the REAL pipeline: install (if
 // needed) → Java resolution → launch plan → Minecraft process, with live
 // phase/status polling and a console view of actual game output.
-// Identity is an offline profile for now (clearly labeled); Microsoft auth
-// is a later milestone and is never faked.
+// Identity comes from the ACTIVE ACCOUNT (Phase 9); launching without one
+// explains exactly what's missing — it never guesses an arbitrary identity.
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  accountGetActive,
   installInstance,
   launchInstance,
   launchStatus,
   readLaunchLog,
   stopLaunch,
   toErrorMessage,
+  type AccountDto,
   type Instance,
   type LaunchStatusDto,
 } from "../api";
-import { Banner, Button, Dialog, EmptyState, Field, Spinner } from "../components/ui";
+import { Banner, Button, Dialog, EmptyState, Spinner } from "../components/ui";
 
 const PHASE_TEXT: Record<string, string> = {
   idle: "Idle",
@@ -40,11 +42,10 @@ export function Home({
 }: {
   instances: Instance[];
   selected: string | null;
-  onNavigate: (section: "instances" | "settings") => void;
+  onNavigate: (section: "instances" | "settings" | "accounts") => void;
   onSelect: (id: string | null) => void;
 }) {
-  const [username, setUsername] = useState("");
-  const [showIdentityDialog, setShowIdentityDialog] = useState(false);
+  const [activeAccount, setActiveAccount] = useState<AccountDto | null>(null);
   const [working, setWorking] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ kind: "warn" | "error" | "info"; text: string } | null>(
     null,
@@ -55,6 +56,13 @@ export function Home({
   const pollRef = useRef<number | null>(null);
 
   const active = instances.find((i) => i.id === selected) ?? null;
+
+  // The active account is resolved fresh so a switch in Accounts reflects here.
+  useEffect(() => {
+    accountGetActive()
+      .then(setActiveAccount)
+      .catch(() => setActiveAccount(null));
+  }, []);
 
   // Poll launch status while a launch is in flight or the game runs.
   const poll = useCallback(async () => {
@@ -105,7 +113,7 @@ export function Home({
         return;
       }
       setWorking("Starting Minecraft…");
-      const pid = await launchInstance(active.id, username.trim());
+      const pid = await launchInstance(active.id);
       setNotice({ kind: "info", text: `Minecraft starting (PID ${pid}).` });
       if (pollRef.current !== null) window.clearInterval(pollRef.current);
       pollRef.current = window.setInterval(() => void poll(), 2000);
@@ -117,8 +125,12 @@ export function Home({
   }
 
   function requestPlay() {
-    if (!username.trim()) {
-      setShowIdentityDialog(true);
+    if (!activeAccount) {
+      setNotice({
+        kind: "warn",
+        text:
+          "No account connected. Add a Microsoft account or create an offline profile in Accounts first.",
+      });
       return;
     }
     void launch();
@@ -150,8 +162,9 @@ export function Home({
                 {active.loader.version ? ` ${active.loader.version}` : ""}
               </span>
               <span className="muted play-note">
-                Offline profile{username ? `: ${username}` : " — you'll be asked for a username"}.
-                Microsoft accounts arrive with the authentication milestone.
+                {activeAccount
+                  ? `Playing as ${activeAccount.username} (${activeAccount.kind === "microsoft" ? "Microsoft" : "Offline"}).`
+                  : "No account connected — add one in Accounts."}
               </span>
             </div>
             {notice && <Banner kind={notice.kind}>{notice.text}</Banner>}
@@ -214,43 +227,6 @@ export function Home({
           </div>
         </div>
       </div>
-
-      {showIdentityDialog && (
-        <Dialog title="Offline profile" onClose={() => setShowIdentityDialog(false)}>
-          <form
-            className="dialog-body"
-            onSubmit={(e) => {
-              e.preventDefault();
-              setShowIdentityDialog(false);
-              void launch();
-            }}
-          >
-            <Field label="Username (offline profile)">
-              <input
-                value={username}
-                autoFocus
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Steve"
-                maxLength={16}
-                pattern="[A-Za-z0-9_]{1,16}"
-                aria-label="Offline profile username"
-              />
-            </Field>
-            <p className="muted">
-              This is an <strong>offline profile</strong>: singleplayer and LAN only.
-              Authenticated servers will reject it — Isekaiyo never fakes a premium login.
-            </p>
-            <div className="dialog-actions">
-              <Button variant="ghost" onClick={() => setShowIdentityDialog(false)}>
-                Cancel
-              </Button>
-              <Button variant="primary" type="submit" disabled={!/^[A-Za-z0-9_]{1,16}$/.test(username.trim())}>
-                Continue
-              </Button>
-            </div>
-          </form>
-        </Dialog>
-      )}
 
       {showConsole && (
         <Dialog title="Game console" onClose={() => setShowConsole(false)}>

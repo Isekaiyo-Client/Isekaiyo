@@ -6,7 +6,6 @@
 //! (`ikk-core::account`) by the application layer — never by the UI.
 
 use ikk_core::error::{Error, ErrorCode, Result};
-use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,25 +44,10 @@ fn validate_username(name: &str) -> Result<()> {
     }
 }
 
-/// Deterministic offline UUID: MD5(`OfflinePlayer:<name>`) formatted as a
-/// v3 UUID — the same convention vanilla's offline mode uses, so a given name
-/// always maps to the same UUID on every machine.
+/// Deterministic offline UUID — delegated to `ikk_core::accounts`, which owns
+/// THE single implementation in the workspace.
 pub fn offline_uuid(username: &str) -> String {
-    let mut hasher = Md5::new();
-    hasher.update(format!("OfflinePlayer:{username}").as_bytes());
-    let digest = hasher.finalize();
-    let mut bytes = digest;
-    bytes[6] = (bytes[6] & 0x0f) | 0x30; // version 3
-    bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
-    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    format!(
-        "{}-{}-{}-{}-{}",
-        &hex[0..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..32]
-    )
+    ikk_core::accounts::offline_uuid(username)
 }
 
 impl LaunchIdentity {

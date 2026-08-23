@@ -11,6 +11,9 @@ repository.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# Name-based (v3) UUIDs for offline profiles — same RustCrypto family the
+# engine already uses; MIT OR Apache-2.0.
+md-5.workspace = true
 
 [lints]
 workspace = true

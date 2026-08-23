@@ -13,11 +13,21 @@ tauri-build.workspace = true
 [dependencies]
 ikk-core = { path = "../../../crates/ikk-core" }
 ikk-api-types = { path = "../../../crates/ikk-api-types" }
+ikk-minecraft = { path = "../../../crates/ikk-minecraft" }
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+ureq.workspace = true
+# Secure credential storage (Phase 9 §11): native backends per platform —
+# Windows Credential Manager, macOS Keychain, Linux secret-service.
+# License: MIT OR Apache-2.0; maintained by the keyring-rs organization.
+keyring = { version = "3", features = [
+    "apple-native",
+    "windows-native",
+    "sync-secret-service",
+] }
 
 [lints]
 workspace = true

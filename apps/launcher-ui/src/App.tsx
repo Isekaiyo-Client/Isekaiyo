@@ -16,6 +16,7 @@ import {
 } from "./api";
 import { Banner } from "./components/ui";
 import { About } from "./views/About";
+import { Accounts } from "./views/Accounts";
 import { Home } from "./views/Home";
 import { Instances } from "./views/Instances";
 import { Mods } from "./views/Mods";
@@ -38,7 +39,7 @@ const NAV: readonly { id: Section; label: string; soon?: boolean }[] = [
   { id: "mods", label: "Mods" },
   { id: "marketplace", label: "Marketplace", soon: true },
   { id: "client", label: "Client", soon: true },
-  { id: "accounts", label: "Accounts", soon: true },
+  { id: "accounts", label: "Accounts" },
   { id: "settings", label: "Settings" },
   { id: "about", label: "About" },
 ];
@@ -174,7 +175,8 @@ export default function App() {
             }
           />
         )}
-        {(section === "marketplace" || section === "client" || section === "accounts") && (
+        {section === "accounts" && <Accounts />}
+        {(section === "marketplace" || section === "client") && (
           <Placeholder section={section.charAt(0).toUpperCase() + section.slice(1)} />
         )}
         {section === "about" && <About info={info} />}

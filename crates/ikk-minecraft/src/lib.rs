@@ -24,6 +24,7 @@ pub mod java;
 pub mod loaders;
 pub mod manifest;
 pub mod metadata;
+pub mod msauth;
 pub mod mods;
 pub mod natives;
 pub mod planner;

@@ -171,6 +171,38 @@ pub struct ModUpdateDto {
 }
 
 // ---------------------------------------------------------------------------
+// Account DTOs (Phase 9). These carry PUBLIC metadata only — the Rust model
+// has no credential fields at all, so this boundary cannot leak secrets.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountDto {
+    pub id: String,
+    /// "microsoft" | "offline"
+    pub kind: String,
+    pub display_name: String,
+    pub username: String,
+    pub uuid: String,
+    pub avatar_url: Option<String>,
+    /// "signed-out" | "authenticated" | "refreshing" | "expired"
+    /// | "reauth-required" | "error"
+    pub status: String,
+    pub active: bool,
+}
+
+/// What the UI shows during "Sign in with Microsoft": visit the real URL,
+/// type the real code. No fake login pages are ever rendered (spec §24).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceCodeDto {
+    /// Not a secret (OAuth device grant): needed by the UI to poll `account_microsoft_poll`.
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    /// Seconds to wait between poll attempts (server-mandated).
+    pub interval_secs: u64,
+}
+
+// ---------------------------------------------------------------------------
 // Instance engine DTOs (Phase 8): validation, repair, dry-run, storage, tasks.
 // ---------------------------------------------------------------------------
 
